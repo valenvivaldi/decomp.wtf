@@ -29,3 +29,21 @@ def test_opencode_gets_a_log_level_every_version_accepts(tmp_path):
     finally:
         agents._which = real
     assert cmd[cmd.index("--log-level") + 1] == "error"
+
+
+def test_a_silent_agent_session_is_ended_and_reported(tmp_path, monkeypatch):
+    """A CLI that hangs (waiting on its provider or a tool) used to hold its session and claim for good."""
+    import decompnet.app.agents as agents
+    from decompnet.app.agents import Manager, Session
+
+    monkeypatch.setattr(agents, "IDLE_LIMIT", 1)
+    manager = Manager(None, tmp_path, "http://127.0.0.1:0/mcp")
+    session = Session("codex-1", "codex", "Codex CLI #1", "game", "codex-1", {})
+    # prints one line, then hangs without printing anything
+    monkeypatch.setattr(manager, "_command", lambda s, token, workdir: (
+        ["sh", "-c", 'echo "{\\"type\\":\\"thread.started\\"}"; sleep 60'], None, ""))
+    import time as _time
+    t0 = _time.monotonic()
+    assert manager._run_cli(session, "token", tmp_path) is False
+    assert _time.monotonic() - t0 < 40
+    assert "said nothing" in session.error

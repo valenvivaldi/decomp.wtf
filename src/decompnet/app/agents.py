@@ -87,6 +87,9 @@ AGY_ALLOW = "mcp(decomp/*)"
 # Functions per helper session: a fresh session starts with a small, clean context (each function's assembly,
 # drafts and diffs would otherwise ride along into the next one): cheaper per call, and the model stays sharp.
 PER_SESSION = 2
+# A CLI agent session that prints nothing for this long (seconds) is stuck: it's ended and a fresh one started.
+# DECOMP_AGENT_IDLE changes it (a slow local model may think longer between tool calls).
+IDLE_LIMIT = int(os.environ.get("DECOMP_AGENT_IDLE", 15 * 60))
 
 
 def kind_id(kind: str) -> str:
@@ -911,6 +914,7 @@ class Manager:
                                 creationflags=flags, start_new_session=not WIN)
         s.proc = proc
         errors: collections.deque = collections.deque(maxlen=20)
+        seen = {"at": time.monotonic(), "hung": False}
 
         def feed_prompt():
             try:
@@ -921,15 +925,28 @@ class Manager:
 
         def drain_err():
             for line in proc.stderr:
+                seen["at"] = time.monotonic()
                 if (text := clean_stderr(s.kind, line)) and (not errors or errors[-1] != text):
                     errors.append(text)
+
+        def watchdog():
+            # an agent that says nothing for this long is stuck (a CLI waiting forever on its provider or a tool):
+            # end the session so the helper starts a fresh one, instead of holding its claim for good
+            while proc.poll() is None and not s.stop.is_set():
+                if time.monotonic() - seen["at"] > IDLE_LIMIT:
+                    seen["hung"] = True
+                    _terminate(proc)
+                    return
+                s.stop.wait(15)
         threading.Thread(target=feed_prompt, daemon=True).start()
         threading.Thread(target=drain_err, daemon=True).start()
+        threading.Thread(target=watchdog, daemon=True).start()
         saw_tool = False
         said: collections.deque = collections.deque(maxlen=20)
         state: dict = {}
         last_error = refused = ""
         for line in proc.stdout:
+            seen["at"] = time.monotonic()
             for kind, text in parse_line(s.kind, line, state):
                 if kind == "usage":
                     self._account(s, json.loads(text))
@@ -945,6 +962,10 @@ class Manager:
                 break
         code = proc.wait()
         s.proc = None
+        if seen["hung"] and not s.stop.is_set():
+            s.error = f"{KINDS[s.kind].name} said nothing for {IDLE_LIMIT // 60:.0f} minutes: ended it (stuck)"
+            s.push("error", s.error)
+            return False
         if refused and not s.stop.is_set():
             raise Fatal(refused)  # every retry would be refused the same way
         if code != 0 and not s.stop.is_set() and (why := no_credit(" ".join([*said, *errors]))):
