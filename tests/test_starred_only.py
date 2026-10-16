@@ -95,3 +95,21 @@ def test_the_list_never_shows_a_function_that_is_already_done(net):
     with net.store.tx() as db:  # matched some other way (a twin, a rescan...), still in the saved list
         db.execute("UPDATE functions SET status='matched' WHERE name='star_b'")
     assert net._open_priority(net._project("game"), ["star_b", "star_a"]) == ["star_a"]
+
+
+def test_a_helper_that_released_a_star_moves_on_to_the_rest_of_the_game(net):
+    """Every helper got the same hard stars back after each release, and spent hours passing them around."""
+    helper, _ = net.local_agent("codex-1")
+    assert net.claim_row(helper, "game")["name"] == "star_b"  # stars first
+    net.release(helper, "star_b", "can't get the registers right", "game")
+    assert net.claim_row(helper, "game")["name"] == "star_a"
+    net.release(helper, "star_a", "same", "game")
+    assert net.claim_row(helper, "game")["name"] == "easy"  # not star_b again
+
+
+def test_another_helper_still_gets_the_stars_first(net):
+    first, _ = net.local_agent("codex-1")
+    net.claim_row(first, "game")
+    net.release(first, "star_b", "", "game")
+    other, _ = net.local_agent("codex-2")
+    assert net.claim_row(other, "game")["name"] == "star_b"

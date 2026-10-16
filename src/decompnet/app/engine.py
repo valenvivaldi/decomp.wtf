@@ -1495,8 +1495,10 @@ class RomNetwork(Network):
             if only and function is not None and function not in names:
                 raise NetworkError(f"{function} isn't marked ★ Next in line: this helper works only on the starred ones")
             if function is None:
-                # a starred-only helper that released a star (data, not code...) doesn't get it handed back again
-                given_up = self.released_since(agent.id, proj["id"], names, self.starred_only[agent.id]) if only else set()
+                # a star this agent released is skipped, like any function it released: otherwise every helper is
+                # handed the same hard stars back after each release, and never reaches the rest of the game. A
+                # starred-only helper skips the ones it released this session (the next session tries them anew).
+                given_up = self.released_since(agent.id, proj["id"], names, self.starred_only[agent.id] if only else 0)
                 for name in names:
                     row = self.store.one("SELECT f.id, f.status FROM functions f WHERE f.project_id=? AND f.name=?", proj["id"], name)
                     if row and row["status"] == "open" and name not in given_up and not held and not self.store.one(
