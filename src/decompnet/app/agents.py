@@ -87,6 +87,9 @@ AGY_ALLOW = "mcp(decomp/*)"
 # Functions per helper session: a fresh session starts with a small, clean context (each function's assembly,
 # drafts and diffs would otherwise ride along into the next one): cheaper per call, and the model stays sharp.
 PER_SESSION = 2
+# A CLI agent session that prints nothing for this long (seconds) is stuck: it's reset (ended, and a fresh one started
+# that's told what the stuck one was doing). DECOMP_AGENT_IDLE changes it (a slow local model may think longer).
+IDLE_LIMIT = int(os.environ.get("DECOMP_AGENT_IDLE", 10 * 60))
 
 
 def kind_id(kind: str) -> str:
@@ -152,17 +155,22 @@ def is_local(base: str, resolve: bool = True) -> bool:
 _SIGNED_OUT = re.compile(r"not logged in|run /login|invalid api key|not authenticated|please (?:log|sign) ?in|"
                          r"auth(?:entication)? method", re.I)
 # what a model's provider says when the account has no credit left (DeepSeek: "Insufficient Balance", OpenAI:
-# "insufficient_quota", Anthropic: "credit balance is too low"): trying again can't help until it's topped up
+# "insufficient_quota", Anthropic: "credit balance is too low"), or a subscription's quota is used up until it resets
+# (Claude Code: "You've hit your session limit · resets 6pm"): trying again can't help until then
 _NO_CREDIT = re.compile(r"insufficient[ _](?:balance|credits?|funds|quota)|exceeded your current quota|"
-                        r"credit balance is too low|payment required|out of credits?", re.I)
+                        r"credit balance is too low|payment required|out of credits?|"
+                        r"hit your (?:session|usage|weekly|daily) limit[^\n]*", re.I)
 # and when it's asked too much at once (HTTP 429): it works again in a while
 _THROTTLED = re.compile(r"too many requests|rate[ _-]?limit|concurrency limit|\b429\b|overloaded", re.I)
 
 
 def no_credit(said: str) -> str | None:
-    """The helper's error when its model's provider says the account is out of credit, else None."""
+    """The helper's error when its model's provider says the account is out of credit or quota, else None."""
     if not (m := _NO_CREDIT.search(said)):
         return None
+    if "limit" in m.group(0).lower():
+        return (f"the agent's plan has used up its quota (\u201c{m.group(0).strip()}\u201d): start the agents again "
+                "once it resets")
     return (f"the model's provider says the account is out of credit (\u201c{m.group(0)}\u201d): top it up, then "
             "start the agents again")
 
@@ -517,6 +525,8 @@ class Session:
     tokens: int = 0
     signed_out: bool = False  # the agent CLI isn't signed in: trying again won't help
     throttled: bool = False  # the last run ended on the provider's limit of requests at once: not a failure
+    last_output: float = 0.0  # when the running session last printed anything (0: no session running)
+    resume: str = ""  # said to the next session: what the previous one was doing when it got stuck
 
     def push(self, kind: str, text: str) -> None:
         self.seq += 1
@@ -526,6 +536,7 @@ class Session:
         return {"id": self.id, "kind": self.kind, "label": self.label, "slug": self.slug, "agent": self.agent_name,
                 "state": self.state, "runs": self.runs, "error": self.error, "started_at": self.started_at,
                 "model": self.options.get("model") or "", "usd": round(self.usd, 4), "tokens": self.tokens,
+                "only_starred": bool(self.options.get("only_starred")), "last_output": self.last_output,
                 "feed": [f for f in self.feed if f["seq"] > since]}
 
 
@@ -542,6 +553,13 @@ class Manager:
     # -- control
 
     def start(self, kind: str, slug: str, count: int = 1, options: dict | None = None) -> list[str]:
+        # Register workers under the same lock as a rescan reservation. A newly
+        # launched helper must not miss the rescan's idle-project check.
+        with self.net.store.lock:
+            self.net._require_not_rescanning(self.net.project_row(slug)["id"])
+            return self._start(kind, slug, count, options)
+
+    def _start(self, kind: str, slug: str, count: int, options: dict | None) -> list[str]:
         options = dict(options or {})
         if kind_id(kind) != kind:
             kind = kind_id(kind)
@@ -647,6 +665,18 @@ class Manager:
         row = self.net.store.one("SELECT COUNT(*) AS n FROM functions WHERE project_id=? AND status='open'", proj["id"])
         return row["n"]
 
+    def _starred_left(self, slug: str, agent_id: int, since: float = 0.0) -> tuple[int, int]:
+        """(★ Next in line functions still worth this helper's time: open and not released by it since `since`, how many
+        of those it could claim now: nobody else holds them)."""
+        proj = self.net.project_row(slug)
+        names = self.net.cfg(proj).get("priority", [])
+        names = [n for n in names if n not in self.net.released_since(agent_id, proj["id"], names, since)]
+        rows = [self.net.store.one(
+            "SELECT f.id, (SELECT agent_id FROM claims WHERE function_id=f.id) AS holder FROM functions f "
+            "WHERE f.project_id=? AND f.name=? AND f.status='open'", proj["id"], name) for name in names]
+        rows = [r for r in rows if r]
+        return len(rows), sum(1 for r in rows if r["holder"] in (None, agent_id))
+
     def _account(self, s: Session, usage: dict) -> None:
         """Add what a session spent to the session and to the project (kept in its config across restarts)."""
         usd, tokens = float(usage.get("usd") or 0), int(usage.get("tokens") or 0)
@@ -666,6 +696,11 @@ class Manager:
     def _run(self, s: Session) -> None:
         agent, token = self.net.local_agent(s.agent_name)
         self.assignments[agent.id] = s.slug
+        only_starred = bool(s.options.get("only_starred"))
+        if only_starred:
+            self.net.starred_only[agent.id] = s.started_at
+        else:
+            self.net.starred_only.pop(agent.id, None)
         workdir = self.home / "agents" / s.id
         workdir.mkdir(parents=True, exist_ok=True)
         failures = throttles = 0
@@ -679,7 +714,18 @@ class Manager:
                            "(seconds; a minute the first time)")
             twins.ordered.wait(120)
         while not s.stop.is_set():
-            if self._left(s.slug) == 0:
+            if only_starred:
+                total, free = self._starred_left(s.slug, agent.id, s.started_at)
+                if total == 0:
+                    s.push("info", "no ★ Next in line function left to try: they're done, or you gave the rest back 🎉")
+                    break
+                if free == 0:
+                    if s.state != "waiting":
+                        s.push("info", "the ★ functions left are being worked on by others: waiting for them")
+                    s.state = "waiting"
+                    s.stop.wait(30)
+                    continue
+            elif self._left(s.slug) == 0:
                 s.push("info", "nothing left to decompile here 🎉")
                 break
             if (cap := self.over_budget(s.slug)) is not None:
@@ -748,9 +794,17 @@ class Manager:
                 pass
         with self.net.store.tx() as db:  # release any claim the agent still holds so others can take it
             db.execute("DELETE FROM claims WHERE agent_id=?", (agent.id,))
+        self.net.starred_only.pop(agent.id, None)
 
     def prompt(self, s: Session) -> str:
         text = self._prompt(s)
+        if s.resume:  # the previous session got stuck: carry on from where it was
+            text += f"\n{s.resume}\n"
+            s.resume = ""
+        if s.options.get("only_starred"):
+            text += ("\nThis session is for the functions the user marked ★ Next in line, and only those: "
+                     "claim_function gives you the next one, and refuses anything else. When it says none is left, "
+                     "stop: the session ends by itself.\n")
         # the know-how every session reads first, given up front (saves each session its first tool calls)
         ov = self.net.overview(s.slug)
         if ov.get("kind") == "fork":
@@ -842,7 +896,8 @@ class Manager:
             }), encoding="utf-8")
             # --print-logs: opencode's JSON error only says "Unexpected server error"; the log line says what failed.
             # (No --dir: it runs in workdir, and OpenCode before 1.4 stops at the flag.)
-            cmd = [exe, "run", "--format", "json", "--print-logs", "--log-level", "ERROR"]
+            # (--log-level lowercase: OpenCode 2 rejects "ERROR", every version takes "error".)
+            cmd = [exe, "run", "--format", "json", "--print-logs", "--log-level", "error"]
             if model:
                 cmd += ["-m", model]
         else:
@@ -864,6 +919,8 @@ class Manager:
                                 creationflags=flags, start_new_session=not WIN)
         s.proc = proc
         errors: collections.deque = collections.deque(maxlen=20)
+        seen = {"at": time.monotonic(), "hung": False}
+        s.last_output = time.time()
 
         def feed_prompt():
             try:
@@ -874,15 +931,28 @@ class Manager:
 
         def drain_err():
             for line in proc.stderr:
+                seen["at"], s.last_output = time.monotonic(), time.time()
                 if (text := clean_stderr(s.kind, line)) and (not errors or errors[-1] != text):
                     errors.append(text)
+
+        def watchdog():
+            # an agent that says nothing for this long is stuck (a CLI waiting forever on its provider or a tool):
+            # end the session so the helper starts a fresh one, instead of holding its claim for good
+            while proc.poll() is None and not s.stop.is_set():
+                if time.monotonic() - seen["at"] > IDLE_LIMIT:
+                    seen["hung"] = True
+                    _terminate(proc)
+                    return
+                s.stop.wait(15)
         threading.Thread(target=feed_prompt, daemon=True).start()
         threading.Thread(target=drain_err, daemon=True).start()
+        threading.Thread(target=watchdog, daemon=True).start()
         saw_tool = False
         said: collections.deque = collections.deque(maxlen=20)
         state: dict = {}
         last_error = refused = ""
         for line in proc.stdout:
+            seen["at"], s.last_output = time.monotonic(), time.time()
             for kind, text in parse_line(s.kind, line, state):
                 if kind == "usage":
                     self._account(s, json.loads(text))
@@ -898,6 +968,21 @@ class Manager:
                 break
         code = proc.wait()
         s.proc = None
+        s.last_output = 0.0
+        if seen["hung"] and not s.stop.is_set():
+            minutes = max(1, IDLE_LIMIT // 60)
+            held = self.net.store.one(
+                "SELECT f.name, f.best_score FROM claims c JOIN agents a ON a.id=c.agent_id "
+                "JOIN functions f ON f.id=c.function_id WHERE a.name=?", s.agent_name)
+            s.resume = (f"Your previous session stopped answering for {minutes} minutes and was reset" + (
+                f" while working on {held['name']} (still claimed by you; best score so far "
+                f"{held['best_score'] if held['best_score'] is not None else 'none'}): get_function shows your best "
+                "attempt. Carry on from it, or release_function with notes if it's not going anywhere."
+                if held else ".") + " Keep each step short: compile often rather than thinking at length.")
+            s.error = f"{KINDS[s.kind].name} said nothing for {minutes} min: reset it" + (
+                f" (it was on {held['name']})" if held else "")
+            s.push("error", s.error)
+            return False
         if refused and not s.stop.is_set():
             raise Fatal(refused)  # every retry would be refused the same way
         if code != 0 and not s.stop.is_set() and (why := no_credit(" ".join([*said, *errors]))):

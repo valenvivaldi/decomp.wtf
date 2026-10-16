@@ -596,15 +596,36 @@ async function poll(first) {
     if (slug !== S.slug) return;
     S.ov = live.overview;
     let mapDirty = false;
+    const rescanned = !first && live.events.some((ev) => ev.kind === "rescan");
     for (const ev of live.events) {
       S.e = Math.max(S.e, ev.id);
-      if (["match", "split", "rename"].includes(ev.kind)) mapDirty = true;
+      if (["match", "split", "rename", "rescan"].includes(ev.kind)) mapDirty = true;
       if (ev.kind === "match" && !first) {
         S.flash.set(ev.detail, performance.now());
         if (ev.agent !== AUTO && ev.agent !== "@" + AUTO) toast(`<code>${esc(ev.detail)}</code>&nbsp;matched by ${esc(ev.agent || "an agent")}`, "match");
       }
       if (ev.kind === "autopilot" && !first) toast(`Autopilot: ${esc(ev.detail)}`, "match");
       if (ev.kind === "link" && !first) toast(`🔗 <code>${esc(ev.detail)}</code>&nbsp;is linked into the game`, "match");
+    }
+    if (rescanned) {
+      S.scores.clear(); S.flash.clear(); S.stats = null;
+      S.diffKey = null;
+      if (!$("drawer").hidden) {
+        S.fn = null;
+        if (S.editDirty) {
+          $("tryBtn").disabled = true;
+          $("fnPin").hidden = true;
+          $("noteAdd").disabled = true;
+          $("fnStatus").textContent = "map changed";
+          $("tryMsg").hidden = false;
+          $("tryMsg").className = "try-msg bad";
+          $("tryMsg").textContent = "The GBA function map was rescanned. Your unsaved source is kept here: copy it before reopening a function against the new map.";
+          showFnTab("code");
+        } else {
+          $("drawer").hidden = true;
+          if ($("dialog").hidden) document.body.classList.remove("locked");
+        }
+      }
     }
     for (const at of live.attempts) {
       S.a = Math.max(S.a, at.id);
@@ -630,6 +651,7 @@ async function poll(first) {
       if (claimSig !== S.claimSig || live.attempts.length) renderList();
     }
     S.claimSig = claimSig;
+    if (rescanned) await loadStats();
     if (S.fn && !$("drawer").hidden) {
       const touched = live.attempts.some((a) => a.function === S.fn) || live.events.some((e) => e.detail === S.fn);
       if (touched) refreshFn(false); else fnBadge();
@@ -694,6 +716,7 @@ function renderHeader(ov) {
   $("phWorkingText").textContent = `${w.n} agent${w.n === 1 ? "" : "s"} working`;
   $("phStartText").textContent = w.running.length ? "Add agents" : "Start agents";
   $("phStart").hidden = fork && !ov.ready;
+  $("phRescan").hidden = fork || ov.platform !== "gba";
   const room = ov.room;
   const pill = $("phRoom");
   pill.hidden = !room;
@@ -743,6 +766,73 @@ function openTogether() {
 }
 $("phFolder").onclick = () => openFolder();
 
+$("phRescan").onclick = () => {
+  if (S.ov.kind === "fork" || S.ov.platform !== "gba") return;
+  const slug = S.slug;
+  const body = dialog("Rescan GBA functions", `<p>Analyse this project's ROM again using your edited <code>functions.cfg</code>. Preview does not change the project.</p>
+    <p class="muted small">Stop agents and autopilot and release any claims first. Applying keeps unchanged functions and safely archives prior work for changed or removed targets. Nothing starts automatically.</p>
+    <div class="row"><button class="primary" id="rsPreview" type="button">Preview changes</button><button class="ghost" id="rsApply" type="button" disabled>Apply reviewed changes</button></div>
+    <p id="rsStatus" role="status" aria-live="polite"></p>
+    <p id="rsError" class="bad" role="alert" hidden></p>
+    <div id="rsReport" hidden><p id="rsCounts"></p><details open><summary>Full report · inspect before applying</summary><pre class="joblog tall" id="rsDetails"></pre></details></div>
+    <details id="rsLogBox" hidden><summary>Analysis log</summary><pre class="joblog" id="rsLog"></pre></details>`);
+  const preview = body.querySelector("#rsPreview"), apply = body.querySelector("#rsApply");
+  const status = body.querySelector("#rsStatus"), error = body.querySelector("#rsError");
+  const report = body.querySelector("#rsReport"), counts = body.querySelector("#rsCounts");
+  const details = body.querySelector("#rsDetails"), log = body.querySelector("#rsLog");
+  let revision = null;
+  const run = async (applying) => {
+    if (applying && !revision) return;
+    if (applying && S.slug === slug && S.fn && S.editDirty) {
+      error.textContent = "Keep your unsaved editor source before applying, then preview again.";
+      error.hidden = false;
+      revision = null; apply.disabled = true;
+      return;
+    }
+    let applied = false;
+    const reviewedRevision = revision;
+    revision = null;
+    preview.disabled = true; apply.disabled = true;
+    error.hidden = true;
+    status.textContent = applying ? "Applying reviewed changes…" : "Analysing functions.cfg…";
+    body.querySelector("#rsLogBox").hidden = false;
+    log.textContent = "";
+    try {
+      const { job } = await api("/api/rescan", { method: "POST", body: { slug, apply: applying, ...(applying ? { revision: reviewedRevision } : {}) } });
+      const result = await followJob(job, log);
+      applied = applying;
+      const c = result.counts;
+      counts.textContent = `${c.added.toLocaleString()} added · ${c.removed.toLocaleString()} removed · ${c.changed.toLocaleString()} changed · ${c.unchanged.toLocaleString()} unchanged`;
+      details.textContent = JSON.stringify(result, null, 2);
+      report.hidden = false;
+      if (applying) {
+        status.textContent = "Changes applied. Agents and autopilot remain stopped.";
+        if (S.slug === slug) {
+          $("drawer").hidden = true; S.fn = null;
+          S.scores.clear(); S.flash.clear(); S.stats = null;
+          S.ov = await api(`/api/project?slug=${encodeURIComponent(slug)}`);
+          renderStats(S.ov);
+          await refreshMap();
+          await loadStats();
+        }
+      } else {
+        revision = result.revision;
+        apply.disabled = !revision;
+        status.textContent = "Preview ready. Inspect the full report, then explicitly apply if it is correct.";
+      }
+    } catch (e) {
+      status.textContent = applied ? "Changes applied, but refreshing the view failed. Reopen the project to refresh it."
+        : applying ? "Apply was not confirmed. Preview again before another apply; no automatic retry." : "Preview did not complete.";
+      error.textContent = e.message;
+      error.hidden = false;
+    } finally {
+      preview.disabled = false;
+    }
+  };
+  preview.onclick = () => run(false);
+  apply.onclick = () => run(true);
+};
+
 /* Forks: how much of the game is built from linked C (decomp.dev's "linked"), next to what matches. */
 function linkedText(ov) {
   const p = ov.kind === "fork" && ov.measures ? ov.measures.complete_code_percent : null;
@@ -761,6 +851,13 @@ function renderStats(ov) {
   renderCompilerNotice(ov);
   renderAgentsKpi(ov);
   renderNext(ov);
+}
+
+/* Linux-only compilers need a Linux side: WSL 2 on Windows, the compiler container (Docker Desktop) on a Mac. */
+function linuxHint(side) {
+  return side === "wsl"
+    ? " It's a Linux program: on Windows it runs inside WSL 2 (one-time setup: <code>wsl --install</code> in an administrator PowerShell, then restart)."
+    : " It's a Linux program: on a Mac it runs in a small compiler-only container (needs Docker Desktop running; installing builds the container's image once).";
 }
 
 function renderCompilerNotice(ov) {
@@ -795,7 +892,7 @@ function renderCompilerNotice(ov) {
   n.className = "notice";
   n.innerHTML = ov.compiler.proprietary
     ? `<span><b>${esc(ov.compiler.name)}</b> isn't installed. It's proprietary software (recompiled by the decomp community); install it only if you accept that.</span><span class="grow"></span><button class="primary small-btn" id="tcInstall" type="button">Install…</button>`
-    : `<span><b>${esc(ov.compiler.name)}</b> isn't installed yet.${ov.compiler.wsl ? " It's a Linux program: on Windows it runs inside WSL 2 (one-time setup: <code>wsl --install</code> in an administrator PowerShell, then restart)." : ""}</span><span class="grow"></span><button class="primary small-btn" id="tcInstall" type="button">Install now</button>`;
+    : `<span><b>${esc(ov.compiler.name)}</b> isn't installed yet.${ov.compiler.linux ? linuxHint(ov.compiler.linux_side) : ""}</span><span class="grow"></span><button class="primary small-btn" id="tcInstall" type="button">Install now</button>`;
   $("tcInstall").onclick = () => installToolchain(ov.compiler.toolchain, ov.compiler.proprietary);
 }
 
@@ -872,8 +969,10 @@ function renderNext(ov) {
   steps.push(`<span class="todo">○</span> Agents`, `<span class="todo">○</span> Export`);
   box.hidden = false;
   box.innerHTML = `<div class="next-text"><b>Next: start your agents</b><span class="steps-line">${steps.join("")}</span></div>
-    ${a && (a.installed || a.id === "api") ? `<button class="primary" id="nextGo" type="button">${esc(launchLabel(a, LZ.model, LZ.count))}</button>` : ""}
-    <button class="ghost" id="nextPick" type="button">Choose agent &amp; model</button>`;
+    <div class="next-actions">
+      ${a && (a.installed || a.id === "api") ? `<button class="primary" id="nextGo" type="button">${esc(launchLabel(a, LZ.model, LZ.count))}</button>` : ""}
+      <button class="ghost" id="nextPick" type="button">Choose agent &amp; model</button>
+    </div>`;
   const go = $("nextGo");
   if (go) go.onclick = () => a.id !== "api" ? startAgents(a, LZ.model, LZ.count, go)
     : (LZ.eps || []).length ? startAgents(a, "", LZ.count, go, { endpoints: LZ.eps }) : showLaunch();
@@ -1439,12 +1538,13 @@ function renderSessions(sessions) {
   const board = new Map((S.stats?.agents || []).map((r) => [r.agent, r]));
   const running = sessions.filter((s) => ["starting", "working", "waiting"].includes(s.state));
   $("stopAll").hidden = running.length < 2;
-  box.innerHTML = sessions.map((s) => {
+  const mine = sessions.map((s) => {
     const claim = S.claims.find((c) => c.agent === s.agent);
     const dot = s.state === "error" ? "err" : s.state === "working" ? "on" : s.state === "stopped" ? "" : "work";
     const live = ["starting", "working", "waiting"].includes(s.state);
     const b = board.get(s.agent);
-    const facts = [s.model ? esc(s.model) : "default model", s.runs ? `session ${s.runs}` : "", b && b.matched ? `<b class="ok">${b.matched} matched</b>` : "", b ? plural(b.compiles, "compile") : "",
+    const quiet = live && s.last_output ? Math.floor((Date.now() / 1000 - s.last_output) / 60) : 0;
+    const facts = [s.model ? esc(s.model) : "default model", s.only_starred ? "only ★" : "", quiet >= 3 ? `<b class="warn-text" title="no output from the agent: it's reset at 10 min">silent ${quiet} min</b>` : "", s.runs ? `session ${s.runs}` : "", b && b.matched ? `<b class="ok">${b.matched} matched</b>` : "", b ? plural(b.compiles, "compile") : "",
       s.usd ? money(s.usd) : s.tokens ? `${(s.tokens / 1000).toFixed(0)}k tokens` : "", s.started_at ? `since ${clock(s.started_at).slice(0, 5)}` : ""].filter(Boolean);
     return `<div class="session"><div class="session-top"><span class="dot ${dot}"></span><b>${esc(s.label)}</b>
         <span class="state ${s.state === "error" ? "err" : ""}">${esc(STATE_TEXT[s.state] || s.state)}</span>
@@ -1455,10 +1555,15 @@ function renderSessions(sessions) {
   }).join("");
   const own = new Set(sessions.map((s) => s.agent));
   const outside = [...new Set(S.claims.filter((c) => !own.has(c.agent) && c.agent !== AUTO).map((c) => c.agent))];
-  box.insertAdjacentHTML("beforeend", outside.map((a) => `<div class="session ext"><div class="session-top"><span class="dot on"></span><b>${esc(a)}</b><span class="tag">${a.startsWith("@") ? "in the room" : "connected agent"}</span></div>
-      <span class="last">on ${S.claims.filter((c) => c.agent === a).map((c) => fnLink(c.name)).join(", ")}</span></div>`).join(""));
-  box.querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn); });
+  const ext = outside.map((a) => `<div class="session ext"><div class="session-top"><span class="dot on"></span><b>${esc(a)}</b><span class="tag">${a.startsWith("@") ? "in the room" : "connected agent"}</span></div>
+      <span class="last">on ${S.claims.filter((c) => c.agent === a).map((c) => fnLink(c.name)).join(", ")}</span></div>`).join("");
   $("noSessions").hidden = sessions.length + outside.length > 0;
+  // Same content as last time: leave the DOM alone. The poll runs every second or two, and replacing a button
+  // between a mouse press and its release drops the click, which made Stop impossible to hit while an agent worked.
+  if (box.dataset.sig === mine + ext) return;
+  box.dataset.sig = mine + ext;
+  box.innerHTML = mine + ext;
+  box.querySelectorAll(".fn").forEach((x) => { x.onclick = () => openFn(x.dataset.fn); });
   box.querySelectorAll("[data-stop]").forEach((b) => {
     b.onclick = async () => {
       await api("/api/agents/stop", { method: "POST", body: { id: b.dataset.stop, remove: !!b.dataset.remove } }).catch((e) => toast(esc(e.message), "err"));
@@ -1513,6 +1618,7 @@ async function startAgents(a, model, count, btn, extra = {}) {
     const options = { ...extra };
     if (model && a.id !== "api") options.model = model;
     if (LZ.per) options.per_session = LZ.per;
+    if (LZ.starred && (S.ov?.priority || []).length) options.only_starred = true;
     await api("/api/agents/start", { method: "POST", body: { kind: a.id, slug: S.slug, count, options } });
     S.st.settings.launcher = { kind: a.id, model: model || "", count };
     if (model && a.id !== "api") {
@@ -1563,6 +1669,7 @@ function renderLauncher(box, compact = false) {
         ${compact ? "" : `<label class="field"><span>Functions per session</span><input data-f="per" type="number" min="1" max="20" value="${LZ.per || S.st.settings.per_session || 2}"></label>`}
         <span class="grow"></span>
         <button class="primary" data-act="start" type="button">${esc(launchLabel(a, LZ.model, LZ.count))}</button></div>
+      <label class="check"><input type="checkbox" data-f="starred" ${LZ.starred && (S.ov?.priority || []).length ? "checked" : ""} ${(S.ov?.priority || []).length ? "" : "disabled"}><span><b>Only ★ Next in line</b> (${(S.ov?.priority || []).length} pinned): work just on the starred functions and stop when they're all done.${(S.ov?.priority || []).length ? "" : " Open a function and click ★ Next first."}</span></label>
         <p class="muted small">${a.id === "api" ? "A built-in agent loop drives the model through the decomp tools." : esc(a.signin)} Each agent takes a different function; a fresh session every few functions keeps its context small.</p>` : ""}
     </div>`;
   wireCopies(box);
@@ -1575,6 +1682,8 @@ function renderLauncher(box, compact = false) {
   box.querySelectorAll("[data-step]").forEach((b) => { b.onclick = () => { LZ.count = Math.max(1, Math.min(8, LZ.count + Number(b.dataset.step))); box.querySelector(".stepper output").textContent = LZ.count; label(); }; });
   const per = box.querySelector('[data-f="per"]');
   if (per) per.onchange = () => { LZ.per = Math.max(1, Math.min(20, Number(per.value) || 4)); };
+  const starred = box.querySelector('[data-f="starred"]');
+  if (starred) starred.onchange = () => { LZ.starred = starred.checked; };
   wireEndpointFields(box);
   box.querySelectorAll("[data-ep]").forEach((c) => { c.onchange = () => { LZ.eps = [...box.querySelectorAll("[data-ep]:checked")].map((x) => x.dataset.ep); label(); }; });
   const addEp = box.querySelector('[data-act="add-ep"]'), pickEp = box.querySelector('[data-act="pick-ep"]');
@@ -1667,6 +1776,7 @@ function eventHtml(ev) {
     case "split": return `${who} split ${esc(d)}`;
     case "files": return `${who ? who + " " : ""}gave code without a source file one: ${esc(d)}`;
     case "import": return `ROM analysed: ${esc(d)}`;
+    case "rescan": return `GBA function map rescanned: ${esc(d)}`;
     case "compiler": return `compiler set to ${esc(d)}`;
     case "collab": return esc(d);
     default: return `${who} ${esc(ev.kind)} ${esc(d)}`;
@@ -1794,6 +1904,7 @@ function highlightC(text) {
 async function openFn(name) {
   const again = S.fn === name && !$("drawer").hidden;
   if (!again) { giveBack(name); S.editDirty = false; $("tryMsg").hidden = true; }
+  $("tryBtn").disabled = false; $("noteAdd").disabled = false;
   S.fn = name;
   $("drawer").hidden = false;
   document.body.classList.add("locked");
@@ -1837,6 +1948,7 @@ async function refreshFn(first) {
     $("fnAddr").textContent = S.ov.kind === "fork"
       ? `${d.unit} · ${d.insns} instructions${d.match_percent != null ? ` · ${d.match_percent >= 100 ? "100" : (Math.floor(d.match_percent * 10) / 10).toFixed(1)}% now` : ""}`
       : `${hex8(d.vram)} · ROM 0x${d.rom_offset.toString(16).toUpperCase()} · ${d.insns} instructions`;
+    if (d.compiler) $("fnAddr").textContent += ` · ${d.compiler.profile || "default"}: ${d.compiler.toolchain} ${d.compiler.flags.join(" ")}`;
     $("fnName").textContent = d.name;
     fnBadge(d);
     const pinned = (S.ov.priority || []).includes(d.name);
@@ -2072,8 +2184,12 @@ function renderList() {
     const best = st === "matched" ? `<span class="ok">100%</span>` : p == null ? `<span class="dim">–</span>` : pctText(p);
     const status = st === "matched" ? `<span class="st matched" title="${esc(f.matched_by ? "by " + f.matched_by : "")}">matched</span>` : st === "asm" ? `<span class="st" title="hand-written assembly: no C compiles to it">assembly</span>` : st === "working" ? `<span class="st working">${esc(f.agent || "working")}</span>`
       : st === "tried" ? `<span class="st tried">tried</span>` : `<span class="st">to do</span>`;
+    const pinned = (S.ov?.priority || []).includes(f.name);
+    // ☆/★ right in the row: pin many functions for the agents without opening each one (not for done or fork ones)
+    const star = fork || st === "matched" || st === "asm" ? (pinned ? `<span class="star">★</span>` : "")
+      : `<button type="button" class="star-btn ${pinned ? "on" : ""}" data-star="${esc(f.name)}" title="${pinned ? "Remove from Next in line" : "Agents take it next (★ Next in line)"}">${pinned ? "★" : "☆"}</button>`;
     return `<tr data-fn="${esc(f.name)}" class="${S.fn === f.name ? "sel" : ""}" tabindex="0"><td class="mono dim">${fork ? esc(f.unit || "") : hex8(f.vram)}</td>
-      <td class="mono name">${(S.ov && (S.ov.priority || []).includes(f.name)) ? `<span class="star" title="agents take it next">★</span>` : ""}${esc(f.name)}</td><td class="r mono">${f.insns.toLocaleString()}</td><td class="r mono">${best}</td>
+      <td class="mono name">${star}${esc(f.name)}</td><td class="r mono">${f.insns.toLocaleString()}</td><td class="r mono">${best}</td>
       <td class="r mono">${f.attempts || `<span class="dim">0</span>`}</td><td>${status}</td></tr>`;
   }).join("") || `<tr class="none"><td colspan="6">No function matches${q ? ` “${esc(L.q)}”` : ""}.</td></tr>`;
   $("fnShown").textContent = rows.length > L.limit ? `${L.limit.toLocaleString()} of ${rows.length.toLocaleString()} shown` : plural(rows.length, "function");
@@ -2086,7 +2202,11 @@ function renderList() {
 $("fnFilter").addEventListener("click", (e) => { const b = e.target.closest("[data-filter]"); if (b) { L.filter = b.dataset.filter; L.limit = 200; renderList(); } });
 $("fnSearch").addEventListener("input", () => { L.q = $("fnSearch").value; L.limit = 200; renderList(); });
 $("fnMore").onclick = () => { L.limit += 500; renderList(); };
-$("fnRows").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-fn]"); if (tr) openFn(tr.dataset.fn); });
+$("fnRows").addEventListener("click", (e) => {
+  const star = e.target.closest("[data-star]");
+  if (star) { e.stopPropagation(); togglePrio(star.dataset.star, !star.classList.contains("on")); return; }
+  const tr = e.target.closest("tr[data-fn]"); if (tr) openFn(tr.dataset.fn);
+});
 $("fnRows").addEventListener("keydown", (e) => { const tr = e.target.closest("tr[data-fn]"); if (tr && e.key === "Enter") openFn(tr.dataset.fn); });
 document.querySelectorAll(".fn-table th[data-sort]").forEach((th) => {
   th.onclick = () => {
@@ -2370,6 +2490,9 @@ async function renderProjectSettings() {
     if (!S.st) await loadState();
     fillCompilers($("setTc"), ov.compiler.toolchain, { n64: "N64", psx: "PS1", ps2: "PS2", gba: "GBA" }[ov.platform]);
     $("setFlags").value = ov.compiler.flags.join(" ");
+    $("setProfiles").value = JSON.stringify(ov.compiler_profiles || {}, null, 2);
+    $("setRanges").value = JSON.stringify(ov.compiler_ranges || [], null, 2);
+    $("setFunctions").value = JSON.stringify(ov.compiler_functions || {}, null, 2);
   }
   const facts = [["Platform", ov.platform_name], ["Game", ov.rom?.title || ov.title], [fork ? "Version" : "Game code", ov.rom?.game_code || ov.version],
     !fork && ov.rom?.region ? ["Region", ov.rom.region] : null, fork ? ["Layout", ov.origin === "scratch" ? (LAYOUT[ov.platform] || "decomp") + " (from scratch)" : ov.fork_kind] : ["Compiler", `${ov.compiler.name} ${ov.compiler.flags.join(" ")}`],
@@ -2386,6 +2509,21 @@ $("setTcSave").onclick = async () => {
     renderProjectSettings();
     toast("Compiler settings saved.");
   } catch (e) { toast(esc(e.message), "err"); }
+};
+$("setProfilesSave").onclick = async () => {
+  const button = $("setProfilesSave");
+  try {
+    const body = { slug: S.slug,
+      compiler_profiles: JSON.parse($("setProfiles").value),
+      compiler_ranges: JSON.parse($("setRanges").value),
+      compiler_functions: JSON.parse($("setFunctions").value) };
+    button.disabled = true;
+    S.ov = await api("/api/compiler", { method: "POST", body });
+    renderStats(S.ov);
+    await renderProjectSettings();
+    toast("Compiler profiles saved.");
+  } catch (e) { toast(esc(e.message), "err"); }
+  finally { button.disabled = false; }
 };
 $("folderBtn").onclick = () => openFolder();
 $("deleteBtn").onclick = () => {
@@ -2496,7 +2634,7 @@ function renderTools() {
   $("toolChips").querySelectorAll("[data-g]").forEach((b) => { b.onclick = () => { toolFilter = b.dataset.g; renderTools(); }; });
   const rows = all.filter((t) => !toolFilter || group(t) === toolFilter);
   $("toolGrid").innerHTML = rows.map((t) => `<div class="tool-card ${t.installed ? "ok" : ""}">
-      <div class="tc-top"><b>${esc(t.name)}</b>${t.license === "proprietary" ? `<span class="chip-s warn">proprietary</span>` : ""}${t.platform ? `<span class="chip-s">${esc(t.platform)}</span>` : ""}${t.wsl ? `<span class="chip-s" title="A Linux program: on Windows it runs inside WSL 2">WSL 2</span>` : ""}</div>
+      <div class="tc-top"><b>${esc(t.name)}</b>${t.license === "proprietary" ? `<span class="chip-s warn">proprietary</span>` : ""}${t.platform ? `<span class="chip-s">${esc(t.platform)}</span>` : ""}${t.linux ? `<span class="chip-s" title="A Linux program: ${esc(t.linux_side)}">${t.linux_side === "wsl" ? "WSL 2" : "Docker"}</span>` : ""}</div>
       <p class="muted small">${esc(t.use)}</p>
       <div class="row">${!t.supported ? `<span class="muted small">not available for this computer</span>` : t.installed ? `<span class="ok-mark">✓ installed</span>` : `<button class="ghost small-btn" data-tc="${esc(t.id)}" data-prop="${t.license === "proprietary" ? 1 : ""}" type="button">Install</button>`}</div></div>`).join("");
   $("toolGrid").querySelectorAll("[data-tc]").forEach((b) => { b.onclick = () => { b.disabled = true; installToolchain(b.dataset.tc, !!b.dataset.prop).finally(() => { b.disabled = false; }); }; });
@@ -2509,7 +2647,8 @@ async function showSettingsPage() {
   $("setAgents").innerHTML = `
     <label class="field"><span>Functions per agent session (a fresh session keeps the agent's context small)</span><input id="perSession" type="number" min="1" max="20" value="${st.settings.per_session}"></label>
     <label class="field"><span>Budget: stop helper agents when a project's agents have spent this much (US dollars, as the agents report it; 0 = no limit)</span><input id="budgetSet" type="number" min="0" step="0.5" value="${st.settings.budget_usd || 0}"></label>
-    <label class="check"><input type="checkbox" id="autopilotSet" ${st.settings.autopilot !== false ? "checked" : ""}><span><b>Autopilot after each import</b>: try every function's machine draft first, so free matches cost no agent time.</span></label>`;
+    <label class="check"><input type="checkbox" id="autopilotSet" ${st.settings.autopilot !== false ? "checked" : ""}><span><b>Autopilot after each import</b>: try every function's machine draft first, so free matches cost no agent time.</span></label>
+    <label class="check"><input type="checkbox" id="autopilotAfterMatchSet" ${st.settings.autopilot_after_match ? "checked" : ""}><span><b>Restart autopilot after a manual match</b>: when autopilot is idle, try remaining machine drafts again after you or an agent matches a function.</span></label>`;
   const theme = savedTheme();
   $("setComputer").innerHTML = `
     <div class="field"><span>Appearance</span><div class="seg" id="themeSeg">${[["", "System"], ["light", "Light"], ["dark", "Dark"]].map(([k, l]) => `<button type="button" data-theme="${k}" class="${theme === k ? "on" : ""}">${l}</button>`).join("")}</div></div>
@@ -2543,6 +2682,7 @@ async function showSettingsPage() {
   const save = (body, msg) => api("/api/settings", { method: "POST", body }).then((s) => { S.st.settings = s; toast(msg); }).catch((e) => toast(esc(e.message), "err"));
   $("perSession").onchange = () => save({ per_session: Number($("perSession").value) }, "Saved.");
   $("autopilotSet").onchange = () => save({ autopilot: $("autopilotSet").checked }, "Saved.");
+  $("autopilotAfterMatchSet").onchange = () => save({ autopilot_after_match: $("autopilotAfterMatchSet").checked }, "Saved.");
   $("budgetSet").onchange = () => save({ budget_usd: Number($("budgetSet").value) || 0 }, "Budget saved.");
 }
 

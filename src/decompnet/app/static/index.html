@@ -178,6 +178,7 @@
           <button class="primary" id="phStart" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg><span id="phStartText">Start agents</span></button>
           <div class="popover" id="launchPop" hidden><div id="launchPopBody"></div></div>
         </div>
+        <button class="ghost" id="phRescan" type="button" hidden>Rescan GBA functions</button>
         <button class="ghost icon" id="phFolder" type="button" aria-label="Open the project folder" title="Open the project folder"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h3.4l1.5 1.5H13A1.5 1.5 0 0 1 14.5 5v7.5A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-9Z"/></svg></button>
       </div>
     </div>
@@ -355,10 +356,18 @@
       <section class="panel" id="compilerPanel">
         <header class="panel-head"><h2>Compiler</h2></header>
         <div class="pad">
-          <p class="muted small">Every function is built with this compiler and these flags. If almost nothing matches, the game was probably built with another compiler or flags.</p>
+          <p class="muted small">Default compiler and flags. Named profiles can override this default by address range or function; a function override takes precedence over its range.</p>
           <label class="field"><span>Compiler</span><select id="setTc"></select></label>
           <label class="field"><span>Flags</span><input id="setFlags" class="mono"></label>
           <div class="row"><button class="primary small-btn" id="setTcSave" type="button">Save</button><button class="ghost small-btn" id="setTcReset" type="button">Default flags</button></div>
+          <details>
+            <summary>Mixed-compiler profiles</summary>
+            <p class="muted small">JSON configuration. Ranges use inclusive start and exclusive end addresses (decimal integers), with an optional segment. Changing a profile rechecks affected matches.</p>
+            <label class="field"><span>Profiles: {"name": {"toolchain": "id", "flags": ["-O2"]}}</span><textarea id="setProfiles" class="mono" rows="8" spellcheck="false"></textarea></label>
+            <label class="field"><span>Ranges: [{"start": 1048576, "end": 2097152, "profile": "name"}]</span><textarea id="setRanges" class="mono" rows="6" spellcheck="false"></textarea></label>
+            <label class="field"><span>Functions: {"func_00100000": "name"}</span><textarea id="setFunctions" class="mono" rows="5" spellcheck="false"></textarea></label>
+            <button class="primary small-btn" id="setProfilesSave" type="button">Save profiles and assignments</button>
+          </details>
         </div>
       </section>
       <section class="panel">

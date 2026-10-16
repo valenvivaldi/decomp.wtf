@@ -23,6 +23,7 @@ import threading
 import time
 from pathlib import Path
 
+from .. import compiler_profiles as profiles
 from .. import scoring, seeds, similarity, toolchains
 from ..elfobj import FunctionObj
 from ..network import Agent, Network, NetworkError, _hash_token
@@ -44,11 +45,12 @@ COMPILERS = {
     "gcc-2.7.2-psx": "PlayStation games (PSY-Q era GCC)",
     "gcc-2.8.1-psx": "later PlayStation games",
     "ee-gcc-2.96": "PlayStation 2 games (Sony's EE GCC)",
+    "mwcc-ps2": "PlayStation 2 games built with CodeWarrior (proprietary)",
     "agbcc": "Game Boy Advance games (pret's agbcc, GCC 2.95)",
 }
 SHORT_NAMES = {"gcc-2.7.2-kmc": "KMC GCC 2.7.2", "ido-7.1": "IDO 7.1", "ido-5.3": "IDO 5.3",
                "gcc-2.7.2-psx": "GCC 2.7.2 (PS1)", "gcc-2.8.1-psx": "GCC 2.8.1 (PS1)", "ee-gcc-2.96": "EE-GCC 2.96",
-               "agbcc": "agbcc"}
+               "agbcc": "agbcc", "mwcc-ps2": "MWCC PS2 3.0.1 b198"}
 # CodeWarrior versions in the `mwcc` pack (GameCube, Wii) and the `mwccarm` pack (DS), for games started from scratch.
 MW_VERSIONS = {
     "gc": ["GC/1.0", "GC/1.1", "GC/1.1p1", "GC/1.2.5", "GC/1.2.5n", "GC/1.3", "GC/1.3.2", "GC/1.3.2r", "GC/2.0",
@@ -73,7 +75,7 @@ TOOLS = {
 # Functions this small are handed out in batches (claim_function count): agents match most on the first try.
 BATCH_INSNS = 48
 PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"], "psx": ["gcc-2.7.2-psx", "gcc-2.8.1-psx"],
-                      "ps2": ["ee-gcc-2.96"], "gba": ["agbcc"]}
+                      "ps2": ["ee-gcc-2.96", "mwcc-ps2"], "gba": ["agbcc"]}
 _AUTO_TOKEN = re.compile(r"\b(?:func|D|B|jtbl|RO|STR|FLT|DBL)_[0-9A-F]{8}\b")
 _ADDRESS = re.compile(r"^(?:0x)?([0-9A-Fa-f]{8})$")
 
@@ -123,10 +125,12 @@ def _preview(data: bytes | None, kind: str) -> str:
     return data[:16].hex(" ")
 
 
+
 class RomNetwork(Network):
     def __init__(self, db_path: str | Path, workspace: Path, claim_ttl: int = 30 * 60):
         super().__init__(db_path, claim_ttl=claim_ttl)
         self.workspace = Path(workspace)
+        self._rebase_roots()
         self._syms: dict[int, SymbolTable] = {}
         self._sym_override: dict[int, SymbolTable] = {}
         self._roms: dict[int, tuple[bytes, list[split.Segment]]] = {}
@@ -138,14 +142,31 @@ class RomNetwork(Network):
         self._ops: dict[int, dict] = {}  # project id -> look-alike index
         self._diffs: dict[tuple, dict] = {}  # (function, source, context, compiler) -> diff for the GUI
         self.autopilots: dict[str, dict] = {}  # slug -> progress of trying every function's machine draft
+        self.autopilot_after_match = False
+        self._autopilot_restart_lock = threading.Lock()
         from .forkengine import ForkEngine  # forks build on this class's claims, attempts and live view
         from .permute import Permuter
         from .twins import Twins
         self.forks = ForkEngine(self)
         self.twins = Twins(self)
         self.permuter = Permuter(self)
+        self._rescanning: set[int] = set()
+        self._active_attempts: dict[int, int] = {}
+        self._rescan_previews: dict[str, tuple[str, list, dict]] = {}
+        self.rescan_busy = lambda slug: False  # server supplies its built-in agent/session guard
+        self.starred_only: dict[int, float] = {}  # helper agent id -> when its session began (★ Next in line only)
 
     # ------------------------------------------------------------------ basics
+
+    def _rebase_roots(self) -> None:
+        """A workspace can be opened from another place than the one that made it (a Mac folder shared with Docker,
+        the same folder in WSL): a project whose stored folder is gone, but whose slug folder sits in this workspace,
+        moves there. Opening it where it was made moves it back the same way."""
+        for p in self.store.all("SELECT id, slug, root FROM projects"):
+            here = self.workspace / p["slug"]
+            if p["root"] and not Path(p["root"]).exists() and here.is_dir():
+                with self.store.tx() as db:
+                    db.execute("UPDATE projects SET root=? WHERE id=?", (str(here), p["id"]))
 
     def _require_budget(self, agent: Agent) -> None:
         """Your machine, your agent: no compile budget."""
@@ -481,6 +502,20 @@ class RomNetwork(Network):
         log(f"ready: {len(fns)} functions to decompile")
         return slug
 
+    def rescan_gba(self, slug: str, *, apply: bool = False, revision: str | None = None, log=print) -> dict:
+        """Preview edited functions.cfg; apply only against the exact preview revision.
+
+        Affected targets and their full history are archived atomically; unchanged
+        targets keep their IDs, matches, attempts and notes. No worker is started.
+        """
+        from .rescan import rescan_gba
+
+        return rescan_gba(self, slug, apply=apply, revision=revision, log=log)
+
+    def _require_not_rescanning(self, pid: int) -> None:
+        if pid in self._rescanning:
+            raise NetworkError("a GBA rescan is in progress; wait for it to finish before starting work")
+
     def _community_layout(self, data: bytes | Path, name: str = "") -> Path | None:
         """The file, when the game starts as a community-layout project: a GameCube/Wii program (DOL) or disc image
         (dtk-template), or a DS ROM (ds-decomp). Bytes are saved to a file first."""
@@ -530,7 +565,7 @@ class RomNetwork(Network):
         """m2c draft, made the first time someone opens the function (imports stay fast)."""
         if fn["seed"] is not None or not seeds.available():
             return fn["seed"]
-        tc = self.cfg(proj)["compiler"]["toolchain"]
+        tc = profiles.effective_compiler(self.cfg(proj), fn)["toolchain"]
         asm = self._asm_text(fn, proj)
         data_asm = None
         if "jtbl_" in fn["asm"]:
@@ -738,6 +773,17 @@ class RomNetwork(Network):
         return "\n".join(out)
 
     def split_function(self, agent: Agent, project: str | None, function: str, at: str, new_name: str = "") -> str:
+        with self.store.lock:
+            pid = self._project(project)["id"]
+            self._require_not_rescanning(pid)
+            self._active_attempts[pid] = self._active_attempts.get(pid, 0) + 1
+        try:
+            return self._split_function_active(agent, project, function, at, new_name)
+        finally:
+            with self.store.lock:
+                self._active_attempts[pid] -= 1
+
+    def _split_function_active(self, agent, project, function, at, new_name):
         self._rom_only(project, "split_function")
         link = self._link(project)
         if link is not None:
@@ -848,6 +894,17 @@ class RomNetwork(Network):
         return f"✅ new function {new_name} at 0x{addr:08X}, {len(code)} bytes."
 
     def rename_symbol(self, agent: Agent, project: str | None, old: str, new: str, message: str = "") -> str:
+        with self.store.lock:
+            pid = self._project(project)["id"]
+            self._require_not_rescanning(pid)
+            self._active_attempts[pid] = self._active_attempts.get(pid, 0) + 1
+        try:
+            return self._rename_symbol_active(agent, project, old, new, message)
+        finally:
+            with self.store.lock:
+                self._active_attempts[pid] -= 1
+
+    def _rename_symbol_active(self, agent, project, old, new, message):
         self._rom_only(project, "rename_symbol")
         proj = self._project(project)
         if not self.is_rom(proj):
@@ -1009,6 +1066,7 @@ class RomNetwork(Network):
         """Up to n more small open functions next to `first` (same file, nearest address), claimed for the agent."""
         now = time.time()
         with self.store.tx() as db:
+            self._require_not_rescanning(proj["id"])
             self._expire_claims(db)
             rows = db.execute(
                 "SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='open' AND f.boost >= 0 AND f.n_insns <= ? "
@@ -1050,6 +1108,18 @@ class RomNetwork(Network):
             time.sleep(0.2)
 
     def attempt(self, agent: Agent, function: str, source: str, project: str | None = None) -> dict:
+        # Include scratch compiles of matched functions, which deliberately have no claim.
+        with self.store.lock:
+            pid = self._function(function, project)["project_id"]
+            self._require_not_rescanning(pid)
+            self._active_attempts[pid] = self._active_attempts.get(pid, 0) + 1
+        try:
+            return self._attempt_active(agent, function, source, project)
+        finally:
+            with self.store.lock:
+                self._active_attempts[pid] -= 1
+
+    def _attempt_active(self, agent: Agent, function: str, source: str, project: str | None = None) -> dict:
         self._yield_autopilot(function, project)
         if (fork := self.fork_slug(project)):
             return self.forks.attempt(agent, fork, function, source)
@@ -1284,7 +1354,16 @@ class RomNetwork(Network):
                                                  k: getattr(twins, k) for k in ("state", "pairs", "tried", "matched", "asm")},
                                              "helper_matches": helpers,
                                              "spend": cfg.get("spend"), "instructions": cfg.get("instructions") or "",
-                                             "priority": cfg.get("priority", [])}
+                                             "priority": self._open_priority(proj, cfg.get("priority", []))}
+
+    def _open_priority(self, proj, names: list[str]) -> list[str]:
+        """The ★ Next in line functions still to do (a match takes one off the list; this hides any done another way)."""
+        if not names:
+            return []
+        done = {r["name"] for r in self.store.all(
+            f"SELECT name FROM functions WHERE project_id=? AND status='matched' AND name IN ({','.join('?' * len(names))})",
+            proj["id"], *names)}
+        return [n for n in names if n not in done]
 
     def _overview(self, slug: str, proj) -> dict:
         if (fork := self.fork_slug(slug)):
@@ -1302,8 +1381,11 @@ class RomNetwork(Network):
             "rom": {k: cfg["rom"].get(k) for k in ("title", "game_code", "region", "size", "sha1", "byte_order", "compiler_guess")},
             "compiler": {"toolchain": tc.id, "name": SHORT_NAMES.get(tc.id, tc.name), "flags": cfg["compiler"]["flags"],
                          "installed": toolchains.installed(tc.id) is not None, "proprietary": tc.proprietary,
-                         "supported": tc.supported, "wsl": tc.via_wsl,
+                         "supported": tc.supported, "linux": tc.via_linux,
+                         "linux_side": toolchains.side_name() if tc.via_linux else "",
                          "why": None if tc.supported else toolchains.unsupported_cpu()},
+            "compiler_profiles": cfg.get("compiler_profiles", {}), "compiler_ranges": cfg.get("compiler_ranges", []),
+            "compiler_functions": cfg.get("compiler_functions", {}),
             "functions": agg["total"] or 0, "matched": agg["matched"] or 0, "bytes": agg["bytes"] or 0,
             "matched_bytes": agg["matched_bytes"] or 0, "attempts": agg["attempts"] or 0,
             "context_version": self._context(proj["id"])["version"],
@@ -1391,16 +1473,39 @@ class RomNetwork(Network):
         return self._update_cfg(slug, change)["priority"]
 
     def claim_row(self, agent: Agent, project: str | None = None, function: str | None = None, strategy: str = "easiest"):
-        if function is None and project and not self.fork_slug(project):
-            proj = self._project(project)
-            for name in self.cfg(proj).get("priority", []):
-                row = self.store.one("SELECT f.id, f.status FROM functions f WHERE f.project_id=? AND f.name=?", proj["id"], name)
-                held = self.store.one("SELECT 1 FROM claims WHERE agent_id=?", agent.id)
-                if row and row["status"] == "open" and not held and not self.store.one(
-                        "SELECT 1 FROM claims WHERE function_id=?", row["id"]):
-                    function = name
-                    break
         self._yield_autopilot(function, project)
+        with self.store.lock:
+            proj = self._project(project) if project or function is None else self.store.one(
+                "SELECT * FROM projects WHERE id=?", self._function(function, project)["project_id"])
+            self._require_not_rescanning(proj["id"])
+            return self._claim_row_available(agent, project, function, strategy)
+
+    def released_since(self, agent_id: int, project_id: int, names: list[str], since: float) -> set[str]:
+        """Which of `names` this agent gave back (release_function) since `since`: it found them not worth doing."""
+        return {n for n in names if self.store.one(
+            "SELECT 1 FROM events WHERE project_id=? AND agent_id=? AND kind='release' AND detail=? AND created_at>=?",
+            project_id, agent_id, n, since)}
+
+    def _claim_row_available(self, agent, project, function, strategy):
+        if project and not self.fork_slug(project):
+            proj = self._project(project)
+            names = self.cfg(proj).get("priority", [])
+            held = self.store.one("SELECT 1 FROM claims WHERE agent_id=?", agent.id)
+            only = agent.id in self.starred_only
+            if only and function is not None and function not in names:
+                raise NetworkError(f"{function} isn't marked ★ Next in line: this helper works only on the starred ones")
+            if function is None:
+                # a starred-only helper that released a star (data, not code...) doesn't get it handed back again
+                given_up = self.released_since(agent.id, proj["id"], names, self.starred_only[agent.id]) if only else set()
+                for name in names:
+                    row = self.store.one("SELECT f.id, f.status FROM functions f WHERE f.project_id=? AND f.name=?", proj["id"], name)
+                    if row and row["status"] == "open" and name not in given_up and not held and not self.store.one(
+                            "SELECT 1 FROM claims WHERE function_id=?", row["id"]):
+                        function = name
+                        break
+                if only and function is None and not held:
+                    raise NetworkError("no ★ Next in line function is left for you: the rest are done, released by you "
+                                       "or being worked on by others. Stop here: this session ends by itself.")
         return Network.claim_row(self, agent, project, function, strategy)
 
     # ------------------------------------------------------------------ autopilot
@@ -1410,6 +1515,17 @@ class RomNetwork(Network):
         background. Whatever already matches is saved before any agent spends a token on it; drafts that compile
         become the function's best attempt, so agents start from them. Agents and autopilot never collide: a
         function is held only while its draft compiles, and claimed ones are skipped."""
+        with self.store.lock:
+            pid = self._project(slug)["id"]
+            self._require_not_rescanning(pid)
+            self._active_attempts[pid] = self._active_attempts.get(pid, 0) + 1
+        try:
+            return self._start_autopilot_available(slug, workers)
+        finally:
+            with self.store.lock:
+                self._active_attempts[pid] -= 1
+
+    def _start_autopilot_available(self, slug: str, workers: int) -> dict:
         state = self.autopilots.get(slug)
         if state and state["state"] == "running":
             return state
@@ -1496,12 +1612,24 @@ class RomNetwork(Network):
                                 f"{drafts} of {state['tried']} functions matched from machine drafts")
 
     def on_match(self, proj, function_id: int, agent: Agent | None = None) -> None:
-        """Its twins get its code, at once. (Not for the full twins pass's own matches while it runs: it tries
-        those twins itself.)"""
+        """Take the function off ★ Next in line; queue twin matches, or start a fresh autopilot pass after a manual
+        match when enabled."""
         if proj is None:
             return
+        name = self.store.one("SELECT name FROM functions WHERE id=?", function_id)
+        if name and name["name"] in self.cfg(self._project(proj["slug"])).get("priority", []):
+            self._update_cfg(proj["slug"], lambda cfg: cfg.__setitem__(
+                "priority", [n for n in cfg.get("priority", []) if n != name["name"]]))
         if agent is not None and agent.name == "autopilot" and self.twins._full_running(proj["slug"]):
             return
+        slug = proj["slug"]
+        if (self.autopilot_after_match and agent is not None and agent.name != "autopilot"
+                and slug not in self.links):
+            with self._autopilot_restart_lock:
+                state = self.autopilots.get(slug)
+                if not state or state["state"] != "running":
+                    self.start_autopilot(slug)
+                    return
         self.twins.after_match(proj, function_id)
 
     def try_quietly(self, agent, proj, fn, source: str) -> dict:
@@ -1515,7 +1643,7 @@ class RomNetwork(Network):
             db.execute("INSERT INTO claims VALUES(?,?,?,?)", (fn["id"], agent.id, now, now + 300))
         try:
             ctx = self._context(proj["id"], fn["unit"])
-            result = self._compile(proj, ctx["header"], source)
+            result = self._compile(proj, ctx["header"], source, fn)
             if not result.ok:
                 return {"matched": False, "score": None}
             cand, verdict, _ = self._evaluate(fn, proj, result.obj)
@@ -1543,12 +1671,13 @@ class RomNetwork(Network):
             self._seed_for(fn, proj)  # the readable draft, for the agents that come after
             ctx = self._context(proj["id"], fn["unit"])
             data_asm = "\n".join(self._jtbl_asm(proj, fn)) if "jtbl_" in (fn["asm"] or "") else None
-            draft = seeds.generate_from_asm(self._asm_text(fn, proj), fn["name"], self.cfg(proj)["compiler"]["toolchain"],
+            draft = seeds.generate_from_asm(self._asm_text(fn, proj), fn["name"],
+                                            profiles.effective_compiler(self.cfg(proj), fn)["toolchain"],
                                             ctx["header"], data_asm, valid=True)
             if not draft:
                 return "fail"
             source = f"/* machine draft (m2c), tried by autopilot */\n{seeds.M2C_MACROS}\n{draft}\n"
-            result = self._compile(proj, ctx["header"], source)
+            result = self._compile(proj, ctx["header"], source, fn)
             if not result.ok:
                 return "fail"
             cand, verdict, _ = self._evaluate(fn, proj, result.obj)
@@ -1583,7 +1712,7 @@ class RomNetwork(Network):
         key = (fn["id"], hashlib.sha1(source.encode()).hexdigest(), ctx["version"], proj["config"])
         if key in self._diffs:
             return self._diffs[key] | {"kind": kind}
-        result = self._compile(proj, ctx["header"], source)
+        result = self._compile(proj, ctx["header"], source, fn)
         if not result.ok:
             out = {"rows": None, "error": result.log.strip()[-3000:] or "it didn't compile", "source": source}
         else:
@@ -1679,17 +1808,35 @@ class RomNetwork(Network):
         return {"events": [dict(e) for e in reversed(events)], "attempts": [dict(t) for t in reversed(attempts)],
                 "claims": claims, "overview": self.overview(slug)}
 
-    def set_compiler(self, slug: str, toolchain: str, flags: list[str] | None = None) -> None:
+    def set_compiler(self, slug: str, toolchain: str | None = None, flags: list[str] | None = None, *,
+                     compiler_profiles=profiles.UNSET, compiler_ranges=profiles.UNSET,
+                     compiler_functions=profiles.UNSET) -> None:
+        """Change the default compiler (`toolchain`, `flags`) and/or the profile assignments: named profiles
+        (toolchain + flags), VRAM ranges (global or per segment) and per-function overrides, see compiler_profiles.
+        Everything is validated before anything is saved."""
         if self.fork_slug(slug):
             raise NetworkError("a fork builds with the project's own compilers and flags")
         proj = self._project(slug)
-        tc = toolchains.get(toolchain)
         cfg = self.cfg(proj)
-        cfg["compiler"] = {"toolchain": tc.id, "flags": flags or tc.flags, "timeout": 20}
+        label = []
+        if toolchain is not None:
+            tc = toolchains.get(toolchain)
+            cfg["compiler"] = {"toolchain": tc.id, "flags": flags or tc.flags, "timeout": 20}
+            label.append(f"{tc.name} {' '.join(cfg['compiler']['flags'])}")
+        for key, value in (("compiler_profiles", compiler_profiles), ("compiler_ranges", compiler_ranges),
+                           ("compiler_functions", compiler_functions)):
+            if value is not profiles.UNSET:
+                cfg[key] = value
+                label.append(key.replace("_", " "))
+        try:
+            profiles.validate(cfg, {r["name"] for r in self.store.all(
+                "SELECT name FROM functions WHERE project_id=?", proj["id"])})
+        except (ValueError, toolchains.ToolchainError) as e:
+            raise NetworkError(str(e))
         with self.store.tx() as db:
             db.execute("UPDATE projects SET config=? WHERE id=?", (json.dumps(cfg), proj["id"]))
             db.execute("UPDATE functions SET seed=NULL WHERE project_id=? AND status='open'", (proj["id"],))
-            self._event(db, proj["id"], None, "compiler", f"{tc.name} {' '.join(cfg['compiler']['flags'])}")
+            self._event(db, proj["id"], None, "compiler", "; ".join(label) or "compiler")
 
     def chat_agent(self, base: str) -> tuple[Agent, str]:
         """An identity for an agent the user talks to (Claude Code, Codex, ... connected with `decomp mcp`): `base`,

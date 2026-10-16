@@ -198,9 +198,11 @@ class Settings:
         eps = [masked(e) for e in self.endpoints()]
         return {"endpoints": eps, "api": eps[0] if eps else {},
                 "per_session": self.data.get("per_session", agents.PER_SESSION), "last_project": self.data.get("last_project"),
-                "autopilot": self.data.get("autopilot", True), "budget_usd": self.data.get("budget_usd") or 0,
+                "autopilot": self.data.get("autopilot", True),
+                "autopilot_after_match": bool(self.data.get("autopilot_after_match")),
+                "budget_usd": self.data.get("budget_usd") or 0,
                 "auto_update": bool(self.data.get("auto_update")), "check_updates": self.data.get("check_updates", True) is not False,
-                "launcher": _launcher(self.data.get("launcher") or {}), "recent_models": self.data.get("recent_models") or {}}
+                "launcher": _launcher(self.data.get("launcher") or {})}
 
 
 def _session_options(entry: dict) -> dict:
@@ -261,8 +263,12 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     mcp_url = f"http://127.0.0.1:{port}/mcp"
     build_id = (updates.installed().get("commit") or "")[:12]  # a branch install: the commit it came from
     manager = agents.Manager(net, home, mcp_url)
+    net.rescan_busy = lambda slug: slug in manager._prep or any(
+        s.slug == slug and s.state in ("starting", "working", "waiting")
+        for s in list(manager.sessions.values()))
     jobs = Jobs(home / "logs" / "decomp.log")
     settings = Settings(home / "settings.json")
+    net.autopilot_after_match = bool(settings.data.get("autopilot_after_match"))
     manager.budget = lambda: float(settings.data.get("budget_usd") or 0)
 
     def remember(running: list[dict]) -> None:
@@ -571,7 +577,9 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         return out
 
     def p_compiler(slug, request, data):
-        net.set_compiler(slug, str(data.get("toolchain", "")), data.get("flags") or None)
+        assignments = {key: data[key] for key in ("compiler_profiles", "compiler_ranges", "compiler_functions")
+                       if key in data}
+        net.set_compiler(slug, data.get("toolchain"), data.get("flags"), **assignments)
         return net.overview(slug)
 
     def p_export(slug, request, data):
@@ -579,6 +587,18 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             res = net.export_rom(slug, log=log)
             return {k: v for k, v in res.items() if k != "log"} | {"log": res.get("log", "")[-1500:]}
         return {"job": jobs.start("export", work)}
+
+    def p_rescan(slug, request, data):
+        apply = data.get("apply", False)
+        if not isinstance(apply, bool):
+            raise ValueError("apply must be a boolean")
+        revision = data.get("revision")
+        if revision is not None and not isinstance(revision, str):
+            raise ValueError("revision must be a string")
+        if apply and not revision:
+            raise ValueError("preview the rescan first, then supply its revision")
+        return {"job": jobs.start("rescan", lambda log: net.rescan_gba(
+            slug, apply=apply, revision=revision, log=log))}
 
     def p_open(slug, request, data):
         why = hostenv.open_folder(Path(net.project_row(slug)["root"]))
@@ -636,6 +656,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     def p_autopilot(slug, request, data):
         if data.get("action") == "stop":
             net.stop_autopilot(slug)
+            net.permuter.stop(slug)  # its background half: otherwise nothing stops it, and it keeps claiming (rescans refuse)
         else:
             net.start_autopilot(slug)
         return net.overview(slug)
@@ -649,9 +670,11 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         "/api/compiler": (p_compiler, ["POST"]), "/api/export": (p_export, ["POST"]), "/api/open": (p_open, ["POST"]),
         "/api/delete": (p_delete, ["POST"]), "/api/agents/manual": (p_manual, ["POST"]),
         "/api/try": (p_try, ["POST"]), "/api/release": (p_release, ["POST"]),
+        "/api/claims/clear": (lambda s, r, d: {"cleared": net.clear_claims(s)}, ["POST"]),
         "/api/autopilot": (p_autopilot, ["POST"]), "/api/instructions": (p_instructions, ["POST"]),
         "/api/priority": (p_priority, ["POST"]), "/api/note": (p_note, ["POST"]),
         "/api/stats": (lambda s, r, d: net.stats(s), ["GET"]),
+        "/api/rescan": (p_rescan, ["POST"]),
     }
     for path, (fn, methods) in routes.items():
         mcp.custom_route(path, methods=methods)(with_project(fn))
@@ -838,6 +861,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         kind, slug = str(data.get("kind", "")), str(data.get("slug", ""))
         given = data.get("options") or {}
         options = {k: v for k, v in given.items() if k in ("model", "per_session")}
+        if given.get("only_starred") is True:  # ★ Next in line only: the helper ends when those are done
+            options["only_starred"] = True
         options.setdefault("per_session", settings.data.get("per_session", agents.PER_SESSION))
         count = max(1, min(int(data.get("count", 1)), 8))
         picked: list[str] = []
@@ -931,6 +956,9 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
             settings.data["per_session"] = max(1, min(int(data["per_session"]), 20))
         if "autopilot" in data:
             settings.data["autopilot"] = bool(data["autopilot"])
+        if "autopilot_after_match" in data:
+            settings.data["autopilot_after_match"] = bool(data["autopilot_after_match"])
+            net.autopilot_after_match = settings.data["autopilot_after_match"]
         if "budget_usd" in data:
             settings.data["budget_usd"] = max(0.0, float(data["budget_usd"] or 0))
         if "auto_update" in data:
