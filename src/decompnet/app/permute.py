@@ -44,7 +44,17 @@ class Permuter:
     def __init__(self, net):
         self.net = net
         self.jobs: dict[str, State] = {}
-        self._turns: dict[int, int] = {}  # function id -> turns spent on it
+
+    def _turns(self, proj) -> dict[str, int]:
+        """Turns spent on each function (by name), kept in the project: an app restart used to reset them, and the
+        same few near misses that no permutation helps came round again and again."""
+        return self.net.cfg(self.net.project_row(proj["slug"])).get("permuter_turns", {})
+
+    def _spend_turn(self, proj, name: str) -> int:
+        def change(cfg):
+            turns = cfg.setdefault("permuter_turns", {})
+            turns[name] = turns.get(name, 0) + 1
+        return self.net._update_cfg(proj["slug"], change)["permuter_turns"][name]
 
     def status(self, slug: str) -> dict | None:
         st = self.jobs.get(slug)
@@ -70,7 +80,7 @@ class Permuter:
             "SELECT * FROM functions WHERE project_id=? AND status='open' AND best_source IS NOT NULL "
             "AND best_score > 0 AND best_score <= n_insns * 100 * ? AND n_insns <= 400 "
             "AND id NOT IN (SELECT function_id FROM claims) ORDER BY CAST(best_score AS REAL) / (n_insns * 100) LIMIT ?",
-            proj["id"], NEAR, limit * 4) if self._turns.get(r["id"], 0) < MAX_TURNS][:limit]
+            proj["id"], NEAR, limit * 4) if self._turns(proj).get(r["name"], 0) < MAX_TURNS][:limit]
 
     def _loop(self, slug: str, st: State) -> None:
         agent, _ = self.net.local_agent("permuter")
@@ -92,9 +102,8 @@ class Permuter:
                 for fn in todo:
                     if st.stop.is_set():
                         break
-                    self._turns[fn["id"]] = self._turns.get(fn["id"], 0) + 1
                     try:
-                        self._permute(agent, proj, fn, st)
+                        self._permute(agent, proj, fn, st, self._spend_turn(proj, fn["name"]))
                     except Exception as e:  # one odd function must not stop the rest
                         log.info("permuter: %s: %s", fn["name"], e)
         finally:
@@ -114,12 +123,12 @@ class Permuter:
         with self.net.store.tx() as db:
             db.execute("DELETE FROM claims WHERE function_id=? AND agent_id=?", (fn["id"], agent.id))
 
-    def _permute(self, agent, proj, fn, st: State) -> None:
+    def _permute(self, agent, proj, fn, st: State, turn: int = 1) -> None:
         if not self._hold(agent, fn):
             return
         st.current, st.tried = fn["name"], st.tried + 1
         fork = self.net.fork_slug(proj["slug"])
-        rng = random.Random(f"{fn['id']}-{self._turns.get(fn['id'])}")
+        rng = random.Random(f"{fn['id']}-{turn}")
         try:
             best_src = cur_src = fn["best_source"]
             best = cur = fn["best_score"]
@@ -150,7 +159,7 @@ class Permuter:
             res = self.net.forks.attempt(agent, fork, fn["name"], source, keep=False, quiet=best)
             return res.get("score")
         ctx = self.net._context(proj["id"], fn["unit"])
-        result = self.net._compile(proj, ctx["header"], source)
+        result = self.net._compile(proj, ctx["header"], source, fn)  # the function's own compiler profile
         if not result.ok:
             return None
         cand, verdict, _ = self.net._evaluate(fn, proj, result.obj)
