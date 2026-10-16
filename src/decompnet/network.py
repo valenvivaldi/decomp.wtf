@@ -44,6 +44,10 @@ STRATEGIES = {
     "closest": "f.best_score IS NULL, f.abandons ASC, CAST(f.best_score AS REAL) / (f.n_insns * 100) ASC",
     "hardest": "f.n_insns DESC",
     "random": "RANDOM()",
+    # for a strong, costly model: the closest to matching first, whoever gave up on them (a 99% one is worth it)
+    "nearest": "f.best_score IS NULL, CAST(f.best_score AS REAL) / (f.n_insns * 100) ASC, f.abandons ASC",
+    # for a cheap model: what nobody has tried yet, small first
+    "untried": "f.attempts > 0, f.abandons > 0, f.n_insns ASC",
 }
 
 

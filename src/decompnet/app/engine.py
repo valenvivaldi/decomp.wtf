@@ -155,6 +155,7 @@ class RomNetwork(Network):
         self._rescan_previews: dict[str, tuple[str, list, dict]] = {}
         self.rescan_busy = lambda slug: False  # server supplies its built-in agent/session guard
         self.starred_only: dict[int, float] = {}  # helper agent id -> when its session began (★ Next in line only)
+        self.focus: dict[int, str] = {}  # helper agent id -> the claim order it was launched with (see STRATEGIES)
 
     # ------------------------------------------------------------------ basics
 
@@ -1036,6 +1037,8 @@ class RomNetwork(Network):
         neighbours in the same file. Most small functions match on the first try, so an agent writes them all and
         judges them in one compile_and_diff: a fraction of the turns. Big functions come alone."""
         count = max(1, min(int(count or 1), 6))
+        if self.focus.get(agent.id) == "nearest":
+            count = 1  # a near-miss finisher works one closely; batches would hand it untried neighbours
         if count == 1 or self._link(project) is not None:
             return self.claim(agent, project, None, strategy)
         proj = self._project(project)
@@ -1508,7 +1511,8 @@ class RomNetwork(Network):
                 if only and function is None and not held:
                     raise NetworkError("no ★ Next in line function is left for you: the rest are done, released by you "
                                        "or being worked on by others. Stop here: this session ends by itself.")
-        return Network.claim_row(self, agent, project, function, strategy)
+        # a helper launched with a focus takes functions in that order, whatever order the agent asks for (after ★)
+        return Network.claim_row(self, agent, project, function, self.focus.get(agent.id, strategy))
 
     # ------------------------------------------------------------------ autopilot
 

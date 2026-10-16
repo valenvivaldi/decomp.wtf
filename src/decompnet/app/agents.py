@@ -537,6 +537,7 @@ class Session:
                 "state": self.state, "runs": self.runs, "error": self.error, "started_at": self.started_at,
                 "model": self.options.get("model") or "", "usd": round(self.usd, 4), "tokens": self.tokens,
                 "only_starred": bool(self.options.get("only_starred")), "last_output": self.last_output,
+                "focus": self.options.get("focus") or "",
                 "feed": [f for f in self.feed if f["seq"] > since]}
 
 
@@ -701,6 +702,10 @@ class Manager:
             self.net.starred_only[agent.id] = s.started_at
         else:
             self.net.starred_only.pop(agent.id, None)
+        if s.options.get("focus"):
+            self.net.focus[agent.id] = s.options["focus"]
+        else:
+            self.net.focus.pop(agent.id, None)
         workdir = self.home / "agents" / s.id
         workdir.mkdir(parents=True, exist_ok=True)
         failures = throttles = 0
@@ -807,12 +812,22 @@ class Manager:
         with self.net.store.tx() as db:  # release any claim the agent still holds so others can take it
             db.execute("DELETE FROM claims WHERE agent_id=?", (agent.id,))
         self.net.starred_only.pop(agent.id, None)
+        self.net.focus.pop(agent.id, None)
 
     def prompt(self, s: Session) -> str:
         text = self._prompt(s)
         if s.resume:  # the previous session got stuck: carry on from where it was
             text += f"\n{s.resume}\n"
             s.resume = ""
+        if (focus := s.options.get("focus")):
+            text += "\n" + {
+                "nearest": "You were launched to finish near misses: claim_function gives you the functions closest to "
+                           "matching first (often a register or an instruction order away). Study the diff of the best "
+                           "attempt closely and make small, targeted changes; that last step is what you're here for.",
+                "untried": "You were launched for functions nobody has tried yet: claim_function gives you those first, "
+                           "small ones first. Get a first compiling version of each quickly; leave hard leftovers to "
+                           "others with notes.",
+            }[focus] + "\n"
         if s.options.get("only_starred"):
             text += ("\nThis session is for the functions the user marked ★ Next in line, and only those: "
                      "claim_function gives you the next one, and refuses anything else. When it says none is left, "

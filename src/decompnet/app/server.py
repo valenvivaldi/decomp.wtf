@@ -869,6 +869,8 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         kind, slug = str(data.get("kind", "")), str(data.get("slug", ""))
         given = data.get("options") or {}
         options = {k: v for k, v in given.items() if k in ("model", "per_session")}
+        if given.get("focus") in ("nearest", "untried"):  # which functions this helper takes first
+            options["focus"] = given["focus"]
         if given.get("only_starred") is True:  # ★ Next in line only: the helper ends when those are done
             options["only_starred"] = True
         options.setdefault("per_session", settings.data.get("per_session", agents.PER_SESSION))
