@@ -1943,8 +1943,9 @@ function fnBadge(d = S.fnDetail) {
   if (!d) return;
   const working = S.claims.find((c) => c.name === d.name);
   const st = $("fnStatus");
-  st.className = "badge " + (d.status === "matched" ? "matched" : working ? "working" : "");
-  st.textContent = d.status === "matched" ? "matched" : working ? `${working.agent} working` : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
+  st.className = "badge " + (d.status === "matched" ? "matched" : d.review ? "review" : working ? "working" : "");
+  st.title = d.review || "";
+  st.textContent = d.status === "matched" ? "matched" : d.review ? "needs review" : working ? `${working.agent} working` : d.best != null ? `best ${pctText(pctOf(d.best, d.insns))}` : "not started";
 }
 
 function showFnTab(tab) {
@@ -1981,6 +1982,12 @@ async function refreshFn(first) {
     $("fnPin").classList.toggle("on", pinned);
     $("fnPin").textContent = pinned ? "★ Next (on)" : "★ Next";
     $("fnPin").onclick = () => togglePrio(d.name, !pinned).then(() => refreshFn(false));
+    $("fnReview").hidden = !d.review;
+    $("fnReview").title = d.review ? `An agent set it aside: ${d.review}. Clear it once you've fixed the map (or it's fine): agents get it again.` : "";
+    $("fnReview").onclick = async () => {
+      try { await api("/api/review/clear", { method: "POST", body: { slug: S.slug, name: d.name } }); toast("Agents get it again."); await refreshMap(true); refreshFn(false); }
+      catch (e) { toast(esc(e.message), "err"); }
+    };
     $("noteAdd").onclick = async () => {
       const text = $("noteText").value.trim();
       if (!text) return;
@@ -2185,15 +2192,16 @@ $("fnNext").onclick = () => stepFn(1);
 
 /* ------------------------------------------------------------------ function list */
 const L = { q: "", filter: "all", sort: "i", dir: 1, limit: 200, rows: [] };
-const FILTERS = [["all", "All"], ["open", "To do"], ["working", "Working"], ["tried", "Tried"], ["matched", "Matched"]];
-const fnState = (f) => (f.status === "matched" ? "matched" : f.status === "asm" ? "asm" : f.status === "working" ? "working" : f.best != null ? "tried" : "open");
-const STATE_RANK = { working: 0, tried: 1, open: 2, matched: 3, asm: 4 };
+const FILTERS = [["all", "All"], ["open", "To do"], ["working", "Working"], ["tried", "Tried"], ["matched", "Matched"], ["review", "Needs review"]];
+// "review": an agent set it aside for a person (a piece of another function, data, a wrong boundary): no agent gets it
+const fnState = (f) => (f.status === "matched" ? "matched" : f.status === "asm" ? "asm" : f.review ? "review" : f.status === "working" ? "working" : f.best != null ? "tried" : "open");
+const STATE_RANK = { review: 0, working: 1, tried: 2, open: 3, matched: 4, asm: 5 };
 
 function renderList() {
   if (!S.map.length || S.tab !== "functions") return;
-  const counts = { all: S.map.length, open: 0, working: 0, tried: 0, matched: 0, asm: 0 };
+  const counts = { all: S.map.length, open: 0, working: 0, tried: 0, matched: 0, asm: 0, review: 0 };
   for (const f of S.map) counts[fnState(f)]++;
-  $("fnFilter").innerHTML = FILTERS.map(([k, label]) => `<button type="button" role="radio" aria-checked="${L.filter === k}" class="${L.filter === k ? "on" : ""}" data-filter="${k}">${label}<span>${counts[k].toLocaleString()}</span></button>`).join("");
+  $("fnFilter").innerHTML = FILTERS.filter(([k]) => k !== "review" || counts.review || L.filter === "review").map(([k, label]) => `<button type="button" role="radio" aria-checked="${L.filter === k}" class="${L.filter === k ? "on" : ""}" data-filter="${k}">${label}<span>${counts[k].toLocaleString()}</span></button>`).join("");
   const q = L.q.trim().toLowerCase();
   let rows = S.map.filter((f) => (L.filter === "all" || fnState(f) === L.filter)
     && (!q || f.name.toLowerCase().includes(q) || hex8(f.vram).toLowerCase().includes(q) || (f.unit || "").toLowerCase().includes(q)));
@@ -2208,10 +2216,11 @@ function renderList() {
     const st = fnState(f), p = pctOf(f.best, f.insns);
     const best = st === "matched" ? `<span class="ok">100%</span>` : p == null ? `<span class="dim">–</span>` : pctText(p);
     const status = st === "matched" ? `<span class="st matched" title="${esc(f.matched_by ? "by " + f.matched_by : "")}">matched</span>` : st === "asm" ? `<span class="st" title="hand-written assembly: no C compiles to it">assembly</span>` : st === "working" ? `<span class="st working">${esc(f.agent || "working")}</span>`
+      : st === "review" ? `<span class="st review" title="${esc(f.review)}">needs review</span>`
       : st === "tried" ? `<span class="st tried">tried</span>` : `<span class="st">to do</span>`;
     const pinned = (S.ov?.priority || []).includes(f.name);
     // ☆/★ right in the row: pin many functions for the agents without opening each one (not for done or fork ones)
-    const star = fork || st === "matched" || st === "asm" ? (pinned ? `<span class="star">★</span>` : "")
+    const star = fork || st === "matched" || st === "asm" || st === "review" ? (pinned ? `<span class="star">★</span>` : "")
       : `<button type="button" class="star-btn ${pinned ? "on" : ""}" data-star="${esc(f.name)}" title="${pinned ? "Remove from Next in line" : "Agents take it next (★ Next in line)"}">${pinned ? "★" : "☆"}</button>`;
     return `<tr data-fn="${esc(f.name)}" class="${S.fn === f.name ? "sel" : ""}" tabindex="0"><td class="mono dim">${fork ? esc(f.unit || "") : hex8(f.vram)}</td>
       <td class="mono name">${star}${esc(f.name)}</td><td class="r mono">${f.insns.toLocaleString()}</td><td class="r mono">${best}</td>

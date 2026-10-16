@@ -670,6 +670,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         "/api/delete": (p_delete, ["POST"]), "/api/agents/manual": (p_manual, ["POST"]),
         "/api/try": (p_try, ["POST"]), "/api/release": (p_release, ["POST"]),
         "/api/claims/clear": (lambda s, r, d: {"cleared": net.clear_claims(s)}, ["POST"]),
+        "/api/review/clear": (lambda s, r, d: net.clear_review(str(d.get("name", "")), s) or {"ok": True}, ["POST"]),
         "/api/autopilot": (p_autopilot, ["POST"]), "/api/instructions": (p_instructions, ["POST"]),
         "/api/priority": (p_priority, ["POST"]), "/api/note": (p_note, ["POST"]),
         "/api/stats": (lambda s, r, d: net.stats(s), ["GET"]),

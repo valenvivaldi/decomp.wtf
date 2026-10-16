@@ -1072,7 +1072,7 @@ class RomNetwork(Network):
             self._require_not_rescanning(proj["id"])
             self._expire_claims(db)
             rows = db.execute(
-                "SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='open' AND f.boost >= 0 AND f.n_insns <= ? "
+                "SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='open' AND f.review IS NULL AND f.boost >= 0 AND f.n_insns <= ? "
                 "AND f.abandons = 0 AND f.unit=? AND f.id NOT IN (SELECT function_id FROM claims) "
                 "ORDER BY ABS(COALESCE(f.vram, 0) - ?), f.id LIMIT ?",
                 (proj["id"], BATCH_INSNS, first["unit"], first["vram"] or 0, n)).fetchall()
@@ -1410,7 +1410,7 @@ class RomNetwork(Network):
     def function_map(self, slug: str) -> list[dict]:
         proj = self._project(slug)
         rows = self.store.all(
-            "SELECT f.name, f.vram, f.size, f.n_insns, f.status, f.best_score, f.attempts, f.unit, f.matched_at, "
+            "SELECT f.name, f.vram, f.size, f.n_insns, f.status, f.best_score, f.attempts, f.unit, f.matched_at, f.review, "
             "a.name AS agent, m.name AS matched_by FROM functions f LEFT JOIN claims c ON c.function_id=f.id "
             "LEFT JOIN agents a ON a.id=c.agent_id LEFT JOIN agents m ON m.id=f.matched_agent_id "
             "WHERE f.project_id=? ORDER BY f.vram, f.unit, f.id", proj["id"])
@@ -1421,7 +1421,7 @@ class RomNetwork(Network):
         return [{"name": r["name"], "vram": r["vram"], "size": r["size"], "insns": r["n_insns"], "unit": r["unit"],
                  "status": r["status"] if r["status"] in ("matched", "asm") else "working" if (r["agent"] or key(r) in remote) else "open",
                  "best": r["best_score"], "attempts": r["attempts"], "agent": r["agent"] or remote.get(key(r)),
-                 "matched_at": r["matched_at"], "matched_by": r["matched_by"]} for r in rows]
+                 "matched_at": r["matched_at"], "matched_by": r["matched_by"], "review": r["review"]} for r in rows]
 
     def map_signature(self, slug: str) -> str:
         """What the function map shows, summed up: it changes when a function is added, matched, tried or claimed.
@@ -1430,12 +1430,13 @@ class RomNetwork(Network):
         proj = self._project(slug)
         f = self.store.one("SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS hi, COALESCE(SUM(attempts), 0) AS at, "
                            "COALESCE(SUM(status='matched'), 0) AS m, COALESCE(SUM(best_score), 0) AS bs, "
+                           "COALESCE(SUM(review IS NOT NULL), 0) AS rv, "
                            "COALESCE(MAX(matched_at), 0) AS ma FROM functions WHERE project_id=?", proj["id"])
         c = self.store.one("SELECT COUNT(*) AS n, COALESCE(SUM(c.function_id * 31 + c.agent_id), 0) AS k FROM claims c "
                            "JOIN functions f ON f.id=c.function_id WHERE f.project_id=?", proj["id"])
         link = self.links.get(slug)
         remote = sorted(str(x.get("vram") or x.get("name")) + x.get("agent", "") for x in (link.claims if link else []))
-        return f"{f['n']}.{f['hi']}.{f['at']}.{f['m']}.{f['bs']}.{f['ma']}.{c['n']}.{c['k']}.{hash(tuple(remote)) & 0xFFFFFF}"
+        return f"{f['n']}.{f['hi']}.{f['at']}.{f['m']}.{f['bs']}.{f['ma']}.{f['rv']}.{c['n']}.{c['k']}.{hash(tuple(remote)) & 0xFFFFFF}"
 
     # ------------------------------------------------------------------ what agents spend, and steering them
 
@@ -1503,8 +1504,8 @@ class RomNetwork(Network):
                 # starred-only helper skips the ones it released this session (the next session tries them anew).
                 given_up = self.released_since(agent.id, proj["id"], names, self.starred_only[agent.id] if only else 0)
                 for name in names:
-                    row = self.store.one("SELECT f.id, f.status FROM functions f WHERE f.project_id=? AND f.name=?", proj["id"], name)
-                    if row and row["status"] == "open" and name not in given_up and not held and not self.store.one(
+                    row = self.store.one("SELECT f.id, f.status, f.review FROM functions f WHERE f.project_id=? AND f.name=?", proj["id"], name)
+                    if row and row["status"] == "open" and not row["review"] and name not in given_up and not held and not self.store.one(
                             "SELECT 1 FROM claims WHERE function_id=?", row["id"]):
                         function = name
                         break
@@ -1618,14 +1619,9 @@ class RomNetwork(Network):
                                 f"{drafts} of {state['tried']} functions matched from machine drafts")
 
     def on_match(self, proj, function_id: int, agent: Agent | None = None) -> None:
-        """Take the function off ★ Next in line; queue twin matches, or start a fresh autopilot pass after a manual
-        match when enabled."""
+        """Queue twin matches, or start a fresh autopilot pass after a manual match when enabled."""
         if proj is None:
             return
-        name = self.store.one("SELECT name FROM functions WHERE id=?", function_id)
-        if name and name["name"] in self.cfg(self._project(proj["slug"])).get("priority", []):
-            self._update_cfg(proj["slug"], lambda cfg: cfg.__setitem__(
-                "priority", [n for n in cfg.get("priority", []) if n != name["name"]]))
         if agent is not None and agent.name == "autopilot" and self.twins._full_running(proj["slug"]):
             return
         slug = proj["slug"]
@@ -1757,7 +1753,7 @@ class RomNetwork(Network):
             fn = self._function(fn["name"], slug)
         return {
             "name": fn["name"], "vram": fn["vram"], "rom_offset": fn["rom_offset"], "size": fn["size"],
-            "insns": fn["n_insns"], "status": fn["status"], "best": fn["best_score"],
+            "insns": fn["n_insns"], "status": fn["status"], "best": fn["best_score"], "review": fn["review"],
             "asm": self._asm_text(fn, proj),
             "source": fn["matched_source"] or fn["best_source"] or (latest["source"] if latest else None) or fn["seed"],
             "source_kind": "matched" if fn["matched_source"] else "best" if fn["best_source"] else

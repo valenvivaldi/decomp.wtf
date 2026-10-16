@@ -674,7 +674,7 @@ class Manager:
         names = [n for n in names if n not in self.net.released_since(agent_id, proj["id"], names, since)]
         rows = [self.net.store.one(
             "SELECT f.id, (SELECT agent_id FROM claims WHERE function_id=f.id) AS holder FROM functions f "
-            "WHERE f.project_id=? AND f.name=? AND f.status='open'", proj["id"], name) for name in names]
+            "WHERE f.project_id=? AND f.name=? AND f.status='open' AND f.review IS NULL", proj["id"], name) for name in names]
         rows = [r for r in rows if r]
         return len(rows), sum(1 for r in rows if r["holder"] in (None, agent_id))
 

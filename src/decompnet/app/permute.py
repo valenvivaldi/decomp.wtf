@@ -77,7 +77,7 @@ class Permuter:
 
     def candidates(self, proj, limit: int = 20) -> list:
         return [r for r in self.net.store.all(
-            "SELECT * FROM functions WHERE project_id=? AND status='open' AND best_source IS NOT NULL "
+            "SELECT * FROM functions WHERE project_id=? AND status='open' AND review IS NULL AND best_source IS NOT NULL "
             "AND best_score > 0 AND best_score <= n_insns * 100 * ? AND n_insns <= 400 "
             "AND id NOT IN (SELECT function_id FROM claims) ORDER BY CAST(best_score AS REAL) / (n_insns * 100) LIMIT ?",
             proj["id"], NEAR, limit * 4) if self._turns(proj).get(r["name"], 0) < MAX_TURNS][:limit]

@@ -386,6 +386,7 @@ a.ghost, a.primary { text-decoration: none; }
 .st.matched { background: var(--match-bg); color: var(--match-ink); border-color: transparent; }
 .st.working { background: var(--work-bg); color: var(--work); border-color: transparent; }
 .st.tried { color: var(--ink-2); }
+.st.review, .badge.review { background: var(--miss-bg); color: var(--miss); border-color: transparent; }
 .list-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; }
 
 /* ------------------------------------------------------------------ agents */

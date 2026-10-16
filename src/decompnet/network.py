@@ -280,6 +280,8 @@ class Network:
                     raise NetworkError(f"{fn['name']} is already matched; use get_function to read its source")
                 if fn["status"] == "asm":
                     raise NetworkError(f"{fn['name']} is hand-written assembly: no C compiles to it, so it's left out")
+                if fn["review"]:
+                    raise NetworkError(f"{fn['name']} is waiting for a person to look at it: {fn['review']}")
                 other = db.execute("SELECT agent_id, expires_at FROM claims WHERE function_id=?", (fn["id"],)).fetchone()
                 if other is not None:
                     raise NetworkError(f"{fn['name']} is claimed by {self._agent_name(other['agent_id'])} "
@@ -288,7 +290,7 @@ class Network:
                 self._event(db, fn["project_id"], agent.id, "claim", fn["name"])
             else:
                 fn = db.execute(
-                    f"""SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='open'
+                    f"""SELECT f.* FROM functions f WHERE f.project_id=? AND f.status='open' AND f.review IS NULL
                         AND f.id NOT IN (SELECT function_id FROM claims)
                         AND f.name NOT IN (SELECT detail FROM events WHERE project_id=? AND agent_id=? AND kind='release')
                         ORDER BY f.name IN (SELECT detail FROM events WHERE project_id=? AND kind='release'
@@ -315,6 +317,29 @@ class Network:
             self._event(db, fn["project_id"], agent.id, "release", fn["name"])
         return (f"Released {fn['name']}. Your best attempt and notes are saved so the next agent starts "
                 f"where you left off. Call claim_function for a new one.")
+
+    def flag_for_review(self, agent: Agent, function: str, reason: str, project: str | None = None) -> str:
+        """A function no agent can do as it stands (a piece of another function, data taken for code, a wrong
+        boundary...): set aside for a person, with why. It's released and no agent is given it until it's cleared."""
+        fn = self._function(function, project)
+        if not reason.strip():
+            raise NetworkError("say what's wrong (what a person should look at)")
+        if fn["status"] != "open":
+            raise NetworkError(f"{fn['name']} is {fn['status']}: nothing to review")
+        with self.store.tx() as db:
+            db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"],))
+            db.execute("UPDATE functions SET review=? WHERE id=?", (reason.strip()[:1000], fn["id"]))
+            db.execute("INSERT INTO notes(project_id,function_id,agent_id,text,created_at) VALUES(?,?,?,?,?)",
+                       (fn["project_id"], fn["id"], agent.id, "Needs review: " + reason.strip()[:4000], time.time()))
+            self._event(db, fn["project_id"], agent.id, "review", fn["name"])
+        return (f"Set {fn['name']} aside for a person to look at; no agent gets it until it's cleared. "
+                "Call claim_function for the next one.")
+
+    def clear_review(self, function: str, project: str | None = None) -> None:
+        """The person looked at it (fixed the map, or decided it's fine): agents get it again."""
+        fn = self._function(function, project)
+        with self.store.tx() as db:
+            db.execute("UPDATE functions SET review=NULL WHERE id=?", (fn["id"],))
 
     def clear_claims(self, project: str | None = None) -> int:
         """Drop every claim in a project, whoever holds it (the user's "cut them all"). The agents holding them aren't
@@ -501,6 +526,12 @@ class Network:
                            (source, agent.id, now, source, fn["id"]))
                 db.execute("DELETE FROM claims WHERE function_id=?", (fn["id"],))
                 self._event(db, fn["project_id"], agent.id, "match", fn["name"])
+                # a matched function leaves ★ Next in line (the list would otherwise show work that's done)
+                row = db.execute("SELECT config FROM projects WHERE id=?", (fn["project_id"],)).fetchone()
+                cfg = json.loads(row["config"])
+                if fn["name"] in cfg.get("priority", []):
+                    cfg["priority"] = [n for n in cfg["priority"] if n != fn["name"]]
+                    db.execute("UPDATE projects SET config=? WHERE id=?", (json.dumps(cfg), fn["project_id"]))
         if matched:
             self.on_match(self.store.one("SELECT * FROM projects WHERE id=?", fn["project_id"]), fn["id"], agent)
 

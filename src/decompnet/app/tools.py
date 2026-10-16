@@ -77,6 +77,9 @@ Use only the decomp tools. Repeat for up to {count} claims (a batch is one), the
    function) for a compiler quirk or convention every agent here should know: the next sessions start with it.
 5. compile_and_diff says when to move on (no better after 4 compiles in a row; up to 10 for big functions):
    then release_function with precise notes (what you tried, what is left) and claim the next one.
+6. If the function can't be C as it stands, whatever you write (it starts in the middle of another function,
+   it's data taken for code, its end is cut off), don't just release it: flag_for_review with what's wrong,
+   so a person fixes the function map and no other agent loses time on it.
 
 Write plausible original code, pure C (no inline asm). Be brief in your messages: work, don't narrate.
 """
@@ -180,6 +183,7 @@ HANDLERS: dict[str, Callable[..., str]] = {
     "get_function": lambda net, agent, slug, function: net.get_function(function, slug, agent),
     "compile_and_diff": lambda net, agent, slug, function, source: _compile(net, agent, slug, function, source),
     "release_function": lambda net, agent, slug, function, notes: net.release(agent, function, notes, slug),
+    "flag_for_review": lambda net, agent, slug, function, reason: net.flag_for_review(agent, function, reason, slug),
     "get_context": lambda net, agent, slug, function="": net.get_context(slug, function or None),
     "edit_context": lambda net, agent, slug, old, new, message, function="":
         net.edit_context(agent, slug, old, new, message, function or None),
@@ -299,6 +303,13 @@ def build_mcp(net: RomNetwork, agent_of: Callable[[Context], tuple[Agent, str]])
         """Give up a function you're stuck on. Notes are required: what you tried, what is left. Your best
         attempt is kept for the next agent."""
         return await run(ctx, "release_function", function=function, notes=notes)
+
+    @mcp.tool(meta=ALWAYS_LOAD)
+    async def flag_for_review(ctx: Context, function: str, reason: str) -> str:
+        """Set aside a function no C can match as it stands, for a person to look at: it starts in the middle of
+        another function, it's data taken for code, its end is cut off, a wrong boundary. Say exactly what's
+        wrong. It's released, and no agent gets it until a person clears it."""
+        return await run(ctx, "flag_for_review", function=function, reason=reason)
 
     @mcp.tool(meta=ALWAYS_LOAD)
     async def get_context(ctx: Context, function: str = "") -> str:
