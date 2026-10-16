@@ -261,6 +261,15 @@ def stop(args) -> int:
         urllib.request.urlopen(req, timeout=5)
     except OSError:
         pass
+    # wait until it has really let go: `decomp` started right after would otherwise find the old app still answering,
+    # say "already running" and exit, and then the old one goes away too (agents finishing take a few seconds)
+    for _ in range(300):
+        if not _alive(prev["port"]):
+            break
+        time.sleep(0.1)
+    else:
+        print("decomp.wtf was asked to stop but is still running")
+        return 1
     print("decomp.wtf stopped")
     return 0
 

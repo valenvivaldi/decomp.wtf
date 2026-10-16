@@ -1,14 +1,18 @@
-## This project is discontinued
+## A maintained fork of decomp.wtf
 
-I've decided to stop working on decomp.wtf and archive it.
+This is [valenvivaldi/decomp.wtf](https://github.com/valenvivaldi/decomp.wtf), a fork of
+[i12bp8/decomp.wtf](https://github.com/i12bp8/decomp.wtf). The original author discontinued decomp.wtf after 0.10.6
+and left the code under the MIT license for anyone who wants to keep going with it; this fork does. It adds, among
+other things: macOS support (the app runs natively, Linux-only compilers in a small Docker container), Metrowerks
+CodeWarrior for PS2 and per-function compiler profiles for games built with more than one compiler, safe GBA function
+map rescans, and agent helpers that work only on the functions you pin and reset themselves when they get stuck.
 
-Over the last few days I noticed that a lot of the decompilation community, the people who made the tools and projects all of this is built on, is against AI decompiling like this. I didn't make decomp.wtf to do any harm, but I respect their opinion, and that's why I'm stopping it here.
+The original author's request still stands, and this fork asks the same: only use it on games you own, don't share the
+game code it produces, and respect the rules of the projects you work with, many of which don't want AI-made
+contributions.
 
-The code stays up as it is, under the MIT license. If you want to fork it and keep going with it, you can. I won't fix issues, review pull requests or make new releases anymore. If you already have it installed it keeps working, it just won't get any updates. You can still install the last version (0.10.6) with the commands under [Install](#install).
-
-If you do use it or build on it, please only use it on games you own, don't share the game code it produces, and respect the rules of the projects you work with, because many of them don't want AI-made contributions.
-
-Thanks to everyone who tried it, reported bugs and sent fixes.
+The install commands below still fetch the original's last release (0.10.6). To run this fork, use a checkout of it
+(see [macOS](#macos-experimental) for `uv run decomp`).
 
 ---
 
