@@ -113,3 +113,35 @@ def test_another_helper_still_gets_the_stars_first(net):
     net.release(first, "star_b", "", "game")
     other, _ = net.local_agent("codex-2")
     assert net.claim_row(other, "game")["name"] == "star_b"
+
+
+def test_a_starred_only_helper_refused_a_held_star_waits_instead_of_failing(net, tmp_path, monkeypatch):
+    """A session refused the stars (other agents took them as it asked) used to count as a failure: three of those
+    stopped the helper with 'ended without compiling anything'."""
+    import threading
+
+    from decompnet.app.agents import Manager, Session
+
+    manager = Manager(net, tmp_path, "http://127.0.0.1:0/mcp")
+    session = Session("codex-11", "codex", "Codex CLI #11", "game", "codex-11", {"only_starred": True})
+    runs, waits = [], []
+
+    def fake_run(s, token, workdir):  # meanwhile other agents took both stars: this session got none
+        runs.append(1)
+        net.claim_row(net.local_agent("codex-12")[0], "game", "star_a")
+        net.claim_row(net.local_agent("codex-13")[0], "game", "star_b")
+        return True
+
+    def fake_wait(timeout=None):
+        waits.append(timeout)
+        if len(waits) >= 2:
+            session.stop.set()
+        return session.stop.is_set()
+
+    monkeypatch.setattr(manager, "_run_cli", fake_run)
+    monkeypatch.setattr(session.stop, "wait", fake_wait)
+    t = threading.Thread(target=manager._run, args=(session,))
+    t.start()
+    t.join(20)
+    assert runs == [1] and session.state != "error" and not session.error
+    assert any("held by other agents" in f["text"] for f in session.feed)

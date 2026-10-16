@@ -756,6 +756,18 @@ class Manager:
                 s.push("error", f"{type(e).__name__}: {e}")
                 ok = False
             if ok and not s.stop.is_set() and self._progress(agent.id) == before:
+                if only_starred:
+                    # it was refused a star: the ones left were held by other agents when it asked (a normal helper
+                    # takes stars first too). That's waiting for them, not a failure: three of those used to stop it
+                    # with an error (and a sign-in hint that had nothing to do with it).
+                    total, _ = self._starred_left(s.slug, agent.id, s.started_at)
+                    if total == 0:
+                        s.push("info", "no ★ Next in line function left to try: they're done, or you gave the rest back 🎉")
+                        break
+                    s.state = "waiting"
+                    s.push("info", "the ★ functions left were held by other agents: waiting for one to be free")
+                    s.stop.wait(60)
+                    continue
                 s.error = "the session ended without compiling anything (check the agent's output)"
                 s.push("error", s.error)
                 ok = False
