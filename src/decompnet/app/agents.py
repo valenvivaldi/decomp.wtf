@@ -87,9 +87,9 @@ AGY_ALLOW = "mcp(decomp/*)"
 # Functions per helper session: a fresh session starts with a small, clean context (each function's assembly,
 # drafts and diffs would otherwise ride along into the next one): cheaper per call, and the model stays sharp.
 PER_SESSION = 2
-# A CLI agent session that prints nothing for this long (seconds) is stuck: it's ended and a fresh one started.
-# DECOMP_AGENT_IDLE changes it (a slow local model may think longer between tool calls).
-IDLE_LIMIT = int(os.environ.get("DECOMP_AGENT_IDLE", 15 * 60))
+# A CLI agent session that prints nothing for this long (seconds) is stuck: it's reset (ended, and a fresh one started
+# that's told what the stuck one was doing). DECOMP_AGENT_IDLE changes it (a slow local model may think longer).
+IDLE_LIMIT = int(os.environ.get("DECOMP_AGENT_IDLE", 10 * 60))
 
 
 def kind_id(kind: str) -> str:
@@ -525,6 +525,8 @@ class Session:
     tokens: int = 0
     signed_out: bool = False  # the agent CLI isn't signed in: trying again won't help
     throttled: bool = False  # the last run ended on the provider's limit of requests at once: not a failure
+    last_output: float = 0.0  # when the running session last printed anything (0: no session running)
+    resume: str = ""  # said to the next session: what the previous one was doing when it got stuck
 
     def push(self, kind: str, text: str) -> None:
         self.seq += 1
@@ -534,7 +536,7 @@ class Session:
         return {"id": self.id, "kind": self.kind, "label": self.label, "slug": self.slug, "agent": self.agent_name,
                 "state": self.state, "runs": self.runs, "error": self.error, "started_at": self.started_at,
                 "model": self.options.get("model") or "", "usd": round(self.usd, 4), "tokens": self.tokens,
-                "only_starred": bool(self.options.get("only_starred")),
+                "only_starred": bool(self.options.get("only_starred")), "last_output": self.last_output,
                 "feed": [f for f in self.feed if f["seq"] > since]}
 
 
@@ -796,6 +798,9 @@ class Manager:
 
     def prompt(self, s: Session) -> str:
         text = self._prompt(s)
+        if s.resume:  # the previous session got stuck: carry on from where it was
+            text += f"\n{s.resume}\n"
+            s.resume = ""
         if s.options.get("only_starred"):
             text += ("\nThis session is for the functions the user marked ★ Next in line, and only those: "
                      "claim_function gives you the next one, and refuses anything else. When it says none is left, "
@@ -915,6 +920,7 @@ class Manager:
         s.proc = proc
         errors: collections.deque = collections.deque(maxlen=20)
         seen = {"at": time.monotonic(), "hung": False}
+        s.last_output = time.time()
 
         def feed_prompt():
             try:
@@ -925,7 +931,7 @@ class Manager:
 
         def drain_err():
             for line in proc.stderr:
-                seen["at"] = time.monotonic()
+                seen["at"], s.last_output = time.monotonic(), time.time()
                 if (text := clean_stderr(s.kind, line)) and (not errors or errors[-1] != text):
                     errors.append(text)
 
@@ -946,7 +952,7 @@ class Manager:
         state: dict = {}
         last_error = refused = ""
         for line in proc.stdout:
-            seen["at"] = time.monotonic()
+            seen["at"], s.last_output = time.monotonic(), time.time()
             for kind, text in parse_line(s.kind, line, state):
                 if kind == "usage":
                     self._account(s, json.loads(text))
@@ -962,8 +968,19 @@ class Manager:
                 break
         code = proc.wait()
         s.proc = None
+        s.last_output = 0.0
         if seen["hung"] and not s.stop.is_set():
-            s.error = f"{KINDS[s.kind].name} said nothing for {IDLE_LIMIT // 60:.0f} minutes: ended it (stuck)"
+            minutes = max(1, IDLE_LIMIT // 60)
+            held = self.net.store.one(
+                "SELECT f.name, f.best_score FROM claims c JOIN agents a ON a.id=c.agent_id "
+                "JOIN functions f ON f.id=c.function_id WHERE a.name=?", s.agent_name)
+            s.resume = (f"Your previous session stopped answering for {minutes} minutes and was reset" + (
+                f" while working on {held['name']} (still claimed by you; best score so far "
+                f"{held['best_score'] if held['best_score'] is not None else 'none'}): get_function shows your best "
+                "attempt. Carry on from it, or release_function with notes if it's not going anywhere."
+                if held else ".") + " Keep each step short: compile often rather than thinking at length.")
+            s.error = f"{KINDS[s.kind].name} said nothing for {minutes} min: reset it" + (
+                f" (it was on {held['name']})" if held else "")
             s.push("error", s.error)
             return False
         if refused and not s.stop.is_set():

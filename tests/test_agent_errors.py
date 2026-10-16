@@ -36,8 +36,10 @@ def test_a_silent_agent_session_is_ended_and_reported(tmp_path, monkeypatch):
     import decompnet.app.agents as agents
     from decompnet.app.agents import Manager, Session
 
+    from decompnet.app.engine import RomNetwork
+
     monkeypatch.setattr(agents, "IDLE_LIMIT", 1)
-    manager = Manager(None, tmp_path, "http://127.0.0.1:0/mcp")
+    manager = Manager(RomNetwork(tmp_path / "decomp.db", tmp_path), tmp_path, "http://127.0.0.1:0/mcp")
     session = Session("codex-1", "codex", "Codex CLI #1", "game", "codex-1", {})
     # prints one line, then hangs without printing anything
     monkeypatch.setattr(manager, "_command", lambda s, token, workdir: (
@@ -47,3 +49,29 @@ def test_a_silent_agent_session_is_ended_and_reported(tmp_path, monkeypatch):
     assert manager._run_cli(session, "token", tmp_path) is False
     assert _time.monotonic() - t0 < 40
     assert "said nothing" in session.error
+
+
+def test_the_session_after_a_reset_is_told_what_the_stuck_one_was_doing(tmp_path, monkeypatch):
+    import json
+
+    import decompnet.app.agents as agents
+    from decompnet.app.agents import Manager, Session
+    from decompnet.app.engine import RomNetwork
+
+    net = RomNetwork(tmp_path / "decomp.db", tmp_path)
+    with net.store.tx() as db:
+        db.execute("INSERT INTO projects(id, slug, name, root, config) VALUES(1,'game','game',?,?)", (str(tmp_path), json.dumps({})))
+        db.execute("INSERT INTO functions(project_id, name, size, n_insns, best_score) VALUES(1,'sub_1',4,2,120)")
+    agent, _ = net.local_agent("codex-1")
+    net.claim_row(agent, "game", "sub_1")
+    monkeypatch.setattr(agents, "IDLE_LIMIT", 1)
+    manager = Manager(net, tmp_path, "http://127.0.0.1:0/mcp")
+    session = Session("codex-1", "codex", "Codex CLI #1", "game", "codex-1", {})
+    monkeypatch.setattr(manager, "_command", lambda s, token, workdir: (["sh", "-c", "sleep 60"], None, ""))
+    assert manager._run_cli(session, "token", tmp_path) is False
+    assert "sub_1" in session.error and "sub_1" in session.resume and "120" in session.resume
+    monkeypatch.setattr(manager, "_prompt", lambda s: "base prompt")
+    monkeypatch.setattr(net, "overview", lambda slug: {"platform": "gba", "compiler": {"toolchain": "agbcc"}})
+    first = manager.prompt(session)
+    assert "reset while working on sub_1" in first
+    assert "reset" not in manager.prompt(session)  # said once
