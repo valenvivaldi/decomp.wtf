@@ -414,29 +414,44 @@ def test_a_public_decomp_together(tmp_path):
     assert head(groot) == head(hroot)
 
 
-def test_a_catalog_that_cant_be_had_says_why(tmp_path, monkeypatch):
-    """decomp.dev declining the request used to look like a catalog with no projects in it."""
+def test_the_retired_decomp_dev_directory_is_never_asked_for(tmp_path, monkeypatch):
+    """#21: decomp.dev retired its project directory (410 Gone). decomp.wtf doesn't ask for it: an install keeps
+    showing the list it downloaded before, or none."""
     import json
-    import os
-    import urllib.error
+    import urllib.request
 
-    def refused():
-        raise urllib.error.HTTPError(catalog.URL, 403, "Forbidden", {}, None)
-
-    asked = []
-    monkeypatch.setattr(catalog, "_fetch", lambda agent: asked.append(agent) or refused())
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("decomp.wtf asked the network"))
     cache = tmp_path / "catalog.json"
-    with pytest.raises(catalog.CatalogError, match="rate limit"):
-        catalog.catalog(cache)
-    with pytest.raises(catalog.CatalogError, match="rate limit"):  # not asked again the same day
-        catalog.catalog(cache)
-    assert len(asked) == 1
-    # every install its own client: a random id, the same on every request
-    assert asked[0].startswith("decompwtf-") and asked[0] == catalog.user_agent(tmp_path) and "decomp.wtf" not in asked[0]
-    assert catalog.catalog(tmp_path / "other.json", fetch=False) == []  # the home page's count asks nothing
+    assert catalog.catalog(cache) == [] and catalog.cached_at(cache) is None
     cache.write_text(json.dumps({"projects": [{"owner": "o", "repo": "r", "platform": "gc"}]}))
-    os.utime(cache, (0, 0))  # an old copy is better than nothing
-    assert [p["id"] for p in catalog.catalog(cache)] == ["o/r"]
+    assert [p["id"] for p in catalog.catalog(cache)] == ["o/r"] and catalog.cached_at(cache)
+
+
+def test_a_projects_own_words_on_ai_come_before_forking(tmp_path):
+    """#21: every project decides about AI for itself. What its README, CONTRIBUTING and agent files say is read
+    (a partial clone, any git host) and shown before anything is forked, with which way it leans."""
+    from decompnet.forks import policy
+
+    assert policy.lean(policy.lines_about_ai("We do **not** accept AI-generated code (ChatGPT, Copilot, ...).")) == "no"
+    assert policy.lean(policy.lines_about_ai("Contributions made with LLMs are welcome if you review them.")) == "yes"
+    assert policy.lean(policy.lines_about_ai("Said the mail: it is plain.")) == "silent"  # "AI" in capitals only
+    melee = ("Introduction - Coding Style - Compiler Notes - Pull Requests - AI Assistance\n\nUsing AI to match functions "
+             "is acceptable and frequently practiced. Do not let AI name fields in structs.")
+    assert policy.lines_about_ai(melee)[0].startswith("Using AI") and policy.lean(policy.lines_about_ai(melee)) == "rules"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# Some decomp\n\nBuild with ninja.\n")
+    (repo / ".github").mkdir()
+    (repo / ".github" / "CONTRIBUTING.md").write_text("Rules.\n\nPull requests written by AI tools will be closed.\n")
+    (repo / "src.c").write_text("/* not read: AI */\n")
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "initial")
+    got = policy.check(f"file://{repo}")
+    assert got["error"] is None and set(got["files"]) == {"README.md", ".github/CONTRIBUTING.md"}
+    assert got["lines"] == [{"file": ".github/CONTRIBUTING.md", "text": "Pull requests written by AI tools will be closed."}]
+    assert got["lean"] == "no"
+    assert policy.check(f"file://{tmp_path}/nothing")["error"].startswith("couldn't read the repository")
 
 
 def test_c_code_going_into_a_cpp_file_gets_c_linkage(tmp_path, monkeypatch):

@@ -27,7 +27,7 @@ from io import BytesIO
 from pathlib import Path
 
 from ..elfobj import _MASKS, Reloc, mask_relocs
-from ..handwritten import ppc_reason
+from ..handwritten import mips_reason, ppc_reason
 from ..network import NetworkError
 
 log = logging.getLogger("decomp.wtf")
@@ -375,7 +375,7 @@ class Twins:
         """Unmatched functions whose code no compiler makes (see handwritten.py) get status 'asm': out of agents'
         way. Returns how many."""
         if not self.net.fork_slug(proj["slug"]):
-            return 0
+            return self._set_aside_rom_asm(proj)
         prints = self.prints(proj)
         found = [fid for fid, p in prints.items() if p.asm]
         n = 0
@@ -386,6 +386,20 @@ class Twins:
                 self.net.forks.mark_asm(r, reason=prints[r["id"]].asm)
                 n += 1
         return n
+
+    def _set_aside_rom_asm(self, proj) -> int:
+        """ROM projects on MIPS (N64, PlayStation, PlayStation 2): mips_reason on each open function's code."""
+        if (proj["arch"] or "mips") != "mips":
+            return 0
+        platform, big = self.net.cfg(proj).get("platform", ""), bool(proj["big_endian"])
+        marks = []
+        for r in self.net.store.all("SELECT id, target, meta FROM functions WHERE project_id=? AND status='open'", proj["id"]):
+            if (why := mips_reason(r["target"] or b"", big, platform)):
+                marks.append((json.dumps({**json.loads(r["meta"] or "{}"), "asm_code": why}), r["id"]))
+        if marks:
+            with self.net.store.tx() as db:
+                db.executemany("UPDATE functions SET status='asm', meta=? WHERE id=? AND status='open'", marks)
+        return len(marks)
 
     def _full_running(self, slug: str) -> bool:
         return (job := self.jobs.get(slug)) is not None and job.state == "running"

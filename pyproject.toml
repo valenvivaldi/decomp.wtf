@@ -1,6 +1,6 @@
 [project]
 name = "decompnet"
-version = "0.10.4"
+version = "0.10.6"
 description = "decomp.wtf (What The Function): your AI agent decompiles games you own into C that compiles to the exact same bytes, with a live view. Runs locally."
 readme = "README.md"
 license = "MIT"

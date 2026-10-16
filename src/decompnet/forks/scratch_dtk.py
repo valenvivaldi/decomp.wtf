@@ -161,10 +161,25 @@ def is_rel(data: bytes) -> bool:
     return 0 < module_id < 0x10000 and 0 < sections <= 32 and 0x40 <= table < len(data) and 1 <= version <= 3
 
 
-def disc_modules(disc: Path) -> list[tuple[str, str, str, int]]:
+def rel_imports(data: bytes) -> set[int]:
+    """The ids of the modules a REL module refers to (its import table; 0 is the program)."""
+    if len(data) < 0x30:
+        return set()
+    table, size = struct.unpack(">II", data[0x28:0x30])
+    return {struct.unpack(">I", data[at:at + 4])[0] for at in range(table, min(table + size, len(data) - 7), 8)}
+
+
+def is_compressed_rel(data: bytes) -> bool:
+    """A REL module packed with Sega's SaCompGC (Sonic Adventure DX keeps some of its modules so): the marker sits
+    near the start of the file. decomp.wtf can't unpack those yet."""
+    return b"SaCompGC" in data[:0x40] or b"SACompGC" in data[:0x40]
+
+
+def disc_modules(disc: Path, packed: list[str] | None = None) -> list[tuple[str, str, str, int]]:
     """The REL modules on a disc: (name, path in the disc, sha1, module id), in the disc's order. Modules can also
     be packed in an archive (Twilight Princess keeps 134 of its 250 in files/RELS.arc): dtk reads those by the
-    path "files/RELS.arc:mmem/d_a_bg.rel". Archives are looked into when their name says they hold RELs."""
+    path "files/RELS.arc:mmem/d_a_bg.rel". Archives are looked into when their name says they hold RELs.
+    `packed`: gets the paths of modules compressed in a way decomp.wtf can't read (see is_compressed_rel)."""
     files = vfs_list(disc)
     rels = [f for f in files if f.lower().endswith(".rel")]
     for arc in (f for f in files if re.search(r"rel", Path(f).name, re.I) and Path(f).suffix.lower() in (".arc", ".szs", ".carc")):
@@ -184,6 +199,8 @@ def disc_modules(disc: Path) -> list[tuple[str, str, str, int]]:
                 vfs_copy(disc, [rel], Path(tmp) / str(i))
             data = (Path(tmp) / ("all" if unique else str(i)) / Path(rel).name).read_bytes()
             if not is_rel(data):
+                if packed is not None and is_compressed_rel(data):
+                    packed.append(rel)
                 continue
             name = re.sub(r"[^A-Za-z0-9_]", "_", Path(rel).stem) or f"module{i}"
             while name in names:
@@ -525,27 +542,44 @@ def _code_units(root: Path, game_id: str) -> list[tuple[str | None, int, int, st
     return sorted(out, key=lambda u: (u[0] or "", u[1]))
 
 
-def _drop_module(root: Path, game_id: str, log_tail: str) -> str | None:
+def _drop_module(root: Path, game_id: str, log_tail: str) -> list[str] | None:
     """A REL module decomp-toolkit can't analyse is left out (its code isn't decompiled; the game keeps the original
     module): Mario Party 6's m433Dll refers to an address the program doesn't have ("Failed to locate DOL section"),
-    and the community's MP6 decomp leaves it out the same way. Returns its name."""
+    and the community's MP6 decomp leaves it out the same way. When what it lacks is another module ("Failed to
+    locate module 1": Sonic Adventure DX's event modules all need one the disc keeps compressed), every module that
+    needs that one is left out at once, not one per analysis. Returns their names."""
     m = re.search(r"Failed: [^\n]*\bmodule (\w+)", log_tail)
     if not m:
         return None
-    name = m.group(1)
     cfg = root / "config" / game_id / "config.yml"
     text = cfg.read_text(encoding="utf-8")
-    block = re.search(rf"^- object: [^\n]*/{re.escape(name)}\.rel\n(?:  [^\n]*\n)*", text, re.M)
-    if not block:
+    blocks = {b.group(1): b for b in re.finditer(r"^- object: [^\n]*/(\w+)\.rel\n(?:  [^\n]*\n)*", text, re.M)}
+    if m.group(1) not in blocks:
         return None
-    left_out = f"# left out: decomp-toolkit can't analyse it ({m.group(0)[8:].strip()})\n" \
-        + "".join(f"# {ln}\n" for ln in block.group(0).splitlines())
-    cfg.write_text(text[:block.start()] + left_out + text[block.end():], encoding="utf-8")
+    names = [m.group(1)]
+    if (need := re.search(r"Failed to locate module (\d+)", log_tail)):
+        ob = re.search(r"^object_base:\s*(\S+)", text, re.M)
+        base = root / ob.group(1) if ob else root
+        for name, block in blocks.items():
+            obj = re.match(r"- object: (\S+)", block.group(0)).group(1)
+            try:
+                data = (base / obj).read_bytes() if ":" not in obj else b""
+            except OSError:
+                continue
+            if name not in names and int(need.group(1)) in rel_imports(data):
+                names.append(name)
+    why = m.group(0)[8:].strip() + (f" ({need.group(0)})" if need and need.group(0) not in m.group(0) else "")
+    for name in names:
+        block = blocks[name]
+        left_out = f"# left out: decomp-toolkit can't analyse it ({why})\n" \
+            + "".join(f"# {ln}\n" for ln in block.group(0).splitlines())
+        text = text.replace(block.group(0), left_out, 1)
+    cfg.write_text(text, encoding="utf-8")
     sha = root / "config" / game_id / "build.sha1"
     if sha.exists():
         sha.write_text("".join(ln for ln in sha.read_text(encoding="utf-8").splitlines(keepends=True)
-                               if f"/{name}/{name}.rel" not in ln), encoding="utf-8")
-    return name
+                               if not any(f"/{n}/{n}.rel" in ln for n in names)), encoding="utf-8")
+    return names
 
 
 def create(root: Path, game: Path, *, compiler: str | None = None, log=print) -> dict:
@@ -568,9 +602,14 @@ def create(root: Path, game: Path, *, compiler: str | None = None, log=print) ->
         except OSError:
             shutil.copyfile(game, orig / game.name)
     sha1 = hashlib.sha1(info["dol"]).hexdigest()
-    modules = disc_modules(game) if info["kind"] == "disc" else []
+    packed: list[str] = []
+    modules = disc_modules(game, packed) if info["kind"] == "disc" else []
     if modules:
         log(f"{len(modules)} REL modules on the disc: analysed with the program")
+    if packed:
+        log(f"{len(packed)} more modules are compressed (Sega's SaCompGC: {', '.join(Path(p).name for p in packed[:4])}"
+            f"{', ...' if len(packed) > 4 else ''}): decomp.wtf can't read those yet, so they and the modules that need "
+            "them aren't decompiled")
     # Modules that are never loaded together may share an id (Mario Party's minigames all do): a reference to
     # "module 1" then can't be resolved, and each links against the program only, as the community's projects set it
     shared_ids = len({m[3] for m in modules}) < len(modules)
@@ -617,8 +656,13 @@ write_asm: true
             log(f"the program's exception table has a function decomp-toolkit's analysis stopped short of (a zeroed "
                 f"word inside its code): declared {declared[0]} ({declared[1]} bytes), analysing again")
         elif (dropped := _drop_module(root, gid, tail)):
-            log(f"left out the module {dropped}: decomp-toolkit can't analyse it (the community's decomps of games "
-                "like this leave such modules out too); the game keeps your copy's")
+            need = re.search(r"Failed to locate module (\d+)", tail)
+            what = (f"the module {dropped[0]}" if len(dropped) == 1 else
+                    f"{len(dropped)} modules ({', '.join(dropped[:4])}{', ...' if len(dropped) > 4 else ''})")
+            log(f"left out {what}: decomp-toolkit can't analyse "
+                + (f"them without module {need.group(1)}, which isn't among the modules decomp.wtf could read"
+                   + (" (the disc keeps some compressed)" if packed else "") if need else "it")
+                + " (the community's decomps of games like this leave such modules out too); the game keeps your copy's")
         elif (newer := _next_linker(compiler, tail)):
             if (diff := _differing(root, gid, tail)) is not None and (closest is None or len(diff) < closest[0]):
                 closest = (len(diff), compiler)

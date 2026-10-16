@@ -174,3 +174,8 @@ h2 { margin-top: 14px; font-size: clamp(1.75rem, 3.2vw, 2.5rem); line-height: 1.
 .cmd.say { background: var(--panel, transparent); color: inherit; box-shadow: none; }
 .cmd.say span { color: var(--muted); }
 .ask small code { font: 12.5px var(--mono); }
+
+/* the discontinued notice */
+.gone { min-height: calc(100vh - 170px); padding-top: 96px; }
+.gone .head { margin-bottom: 0; }
+.gone .head p a { color: var(--ink); text-underline-offset: 3px; }

@@ -66,3 +66,23 @@ copy:
     subprocess.run([str(gas), "-mgekko", "-mregnames", "-o", str(tmp_path / "x.o"), str(tmp_path / "x.s")], check=True)
     prints = object_prints((tmp_path / "x.o").read_bytes())
     assert prints["__ptmf_scall"].asm.startswith("reads r12") and prints["copy"].asm == ""
+
+
+def le(*words: int) -> bytes:
+    return b"".join(struct.pack("<I", w) for w in words)
+
+
+def test_mips_code_no_compiler_makes():
+    """#22 (a PS1 game): agents spent their turns on a one-instruction piece that runs into the next function, and on
+    PSY-Q's libgte (ctc2: the GTE, which C can't drive without inline asm)."""
+    from decompnet.handwritten import mips_reason
+
+    assert mips_reason(le(0x8D110024), False, "psx").startswith("ends without a return")  # lw s1, 0x24(t0)
+    assert "GTE" in mips_reason(le(0x48C4D000, 0x03E00008, 0), False, "psx")  # ctc2 a0, $26; jr ra; nop
+    assert "coprocessor 0" in mips_reason(le(0x40026000, 0x03E00008, 0), False, "n64")  # mfc0 v0, Status
+    assert mips_reason(le(0x8D020000, 0x03E00008, 0), False, "psx").startswith("reads t0")  # lw v0, 0(t0); jr ra
+    # compiled code: a prologue, a call, the epilogue; on the PS2, t0-t3 carry arguments
+    prologue = le(0x27BDFFE8, 0xAFBF0010, 0x0C000000, 0, 0x8FBF0010, 0x03E00008, 0x27BD0018)
+    assert mips_reason(prologue, False, "psx") is None
+    assert mips_reason(le(0x8D020000, 0x03E00008, 0), False, "ps2") is None  # lw v0, 0(t0) on the PS2: an argument
+    assert mips_reason(le(0x03E00008, 0, 0, 0), False, "psx") is None  # alignment padding after jr ra

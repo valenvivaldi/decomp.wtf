@@ -31,7 +31,6 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .. import __version__, hostenv, toolchains
-from ..forks.catalog import CatalogError
 from ..network import NetworkError
 from ..rom.n64 import RomError
 from . import agents, chat, collab, connect, tools, updates
@@ -683,13 +682,22 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
     @mcp.custom_route("/api/catalog", methods=["GET"])
     async def api_catalog(request: Request) -> Response:
+        """The public decomps decomp.dev listed, as this install downloaded them before it retired its directory."""
         if (bad := guard(request)):
             return bad
+        projects, at = await call(net.forks.catalog)
+        return JSONResponse({"projects": projects, "downloaded": at})
+
+    @mcp.custom_route("/api/fork/policy", methods=["POST"])
+    async def api_fork_policy(request: Request) -> Response:
+        """What a public decomp says about AI and contributions, read from its own files before it's forked."""
+        if (bad := guard(request, write=True)):
+            return bad
+        data = await body(request)
         try:
-            fetch = request.query_params.get("cached") != "1"  # the home page's count: the cached list only
-            return JSONResponse({"projects": await call(lambda: net.forks.catalog(fetch=fetch))})
-        except CatalogError as e:
-            return fail(e, 502)
+            return JSONResponse(await call(lambda: net.forks.policy(str(data.get("repo", "")))))
+        except NetworkError as e:
+            return fail(e)
 
     @mcp.custom_route("/api/fork", methods=["POST"])
     async def api_fork(request: Request) -> Response:

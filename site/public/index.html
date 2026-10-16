@@ -3,26 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>decomp.wtf · What The Function</title>
-<meta name="description" content="Free, open-source app: point the AI agent you already use at a game you own, and it turns it back into C that compiles to the exact same bytes. Runs on your computer.">
+<title>decomp.wtf · discontinued</title>
+<meta name="description" content="decomp.wtf is discontinued. The code stays on GitHub under the MIT license.">
 <link rel="canonical" href="https://decomp.wtf/">
 <meta name="theme-color" content="#f5f3ee" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0c0c0a" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://decomp.wtf/">
-<meta property="og:title" content="decomp.wtf · What The Function">
-<meta property="og:description" content="Your AI agent turns games you own back into C, byte for byte, and you watch it happen. Free and open source.">
-<meta property="og:image" content="https://decomp.wtf/og.png">
-<meta name="twitter:card" content="summary_large_image">
+<meta property="og:title" content="decomp.wtf · discontinued">
+<meta property="og:description" content="decomp.wtf is discontinued. The code stays on GitHub under the MIT license.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preload" href="/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/fonts/GeistMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/data/sim.json" as="fetch" crossorigin>
 <link rel="stylesheet" href="/site.css">
-<link rel="stylesheet" href="/sim.css">
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
 <header class="nav" id="nav">
   <div class="wrap">
     <a class="brand" href="/" aria-label="decomp.wtf home">
@@ -30,208 +24,22 @@
       <span>decomp<b>.wtf</b></span>
     </a>
     <nav class="links" aria-label="Sections">
-      <a href="#how">How it works</a>
-      <a href="#public">Public decomps</a>
-      <a href="#agents">Agents</a>
-      <a href="#faq">FAQ</a>
       <a href="https://github.com/i12bp8/decomp.wtf">GitHub</a>
-      <a class="cta" href="#get">Install</a>
     </nav>
   </div>
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="wrap hero-center">
-    <p class="pill"><i></i>free &amp; open source · runs locally</p>
-    <h1>What the function<em>?</em></h1>
-    <p class="lede">Point the AI agent you already use at a game you own. decomp.wtf turns it back into C, one function at a time, and checks every function byte for byte against the original.</p>
-    <div class="install" id="get">
-      <div class="os" role="tablist" aria-label="Your system">
-        <button role="tab" type="button" data-os="unix" class="on" aria-selected="true">Linux <span class="st">supported</span></button>
-        <button role="tab" type="button" data-os="win" aria-selected="false">Windows <span class="st">unstable</span></button>
-      </div>
-      <div class="cmd" data-os="unix"><span>$</span><code>curl -fsSL https://decomp.wtf/install.sh | bash</code><button type="button" class="copy" data-copy="curl -fsSL https://decomp.wtf/install.sh | bash">Copy</button></div>
-      <div class="cmd" data-os="win" hidden><span>&gt;</span><code>irm https://decomp.wtf/install.ps1 | iex</code><button type="button" class="copy" data-copy="irm https://decomp.wtf/install.ps1 | iex">Copy</button></div>
-      <small data-os="unix">Paste into Terminal. It installs everything and opens the app. After that, start it any time from your apps menu or by typing <code>decomp</code>. <a href="/install.sh">Read the script</a></small>
-      <small data-os="win" hidden>Paste into PowerShell. It installs everything and opens the app. After that, start it any time from the Start menu or your desktop, or by typing <code>decomp</code>. <b>Windows support is new and still unstable</b> (decomp.wtf runs in its own WSL 2 Linux there): problems are worth <a href="https://github.com/i12bp8/decomp.wtf/issues">reporting</a>. <a href="/install.ps1">Read the script</a></small>
-    </div>
-  </div>
-
-  <div class="wrap sim-wrap">
-    <div class="sim" id="sim" aria-label="Interactive simulation of decomp.wtf decompiling the demo ROM">
-      <div class="sim-bar">
-        <span class="sim-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span class="sim-title">decomp.wtf <span>/ Demo Quest 64</span></span>
-        <div class="sim-ctl">
-          <button type="button" class="sim-btn" data-act="play" aria-label="Pause">Pause</button>
-          <div class="sim-seg" role="group" aria-label="Speed">
-            <button type="button" data-speed="1">1×</button><button type="button" data-speed="4" class="on">4×</button><button type="button" data-speed="16">16×</button>
-          </div>
-          <button type="button" class="sim-btn" data-act="add">+ Agent</button>
-          <button type="button" class="sim-btn" data-act="reset" aria-label="Restart">Restart</button>
-        </div>
-      </div>
-      <div class="sim-body">
-        <div class="sim-main">
-          <div class="sim-stats">
-            <div><span>Matched code</span><b data-stat="pct">0%</b><i class="sim-meter"><i data-stat="bar"></i></i></div>
-            <div><span>Functions</span><b data-stat="fns">0 / 0</b></div>
-            <div><span>Compiles</span><b data-stat="compiles">0</b></div>
-            <div><span>Agents</span><b data-stat="agents">0</b></div>
-          </div>
-          <div class="sim-map" data-map aria-label="Every square is a function of the game, in ROM order. Click one to inspect it."></div>
-          <div class="sim-inspect">
-            <div class="sim-ihead"><b data-i="name">Loading the demo ROM…</b><span data-i="meta"></span><button type="button" class="sim-follow" data-act="follow" hidden>Follow live</button></div>
-            <div class="sim-panes">
-              <div><p>Assembly from the ROM</p><pre data-i="asm"></pre></div>
-              <div><p data-i="clabel">The agent's C</p><pre data-i="c"></pre></div>
-            </div>
-          </div>
-        </div>
-        <aside class="sim-side">
-          <p class="sim-h">Agents</p>
-          <div class="sim-agents" data-agents></div>
-          <p class="sim-h">Live</p>
-          <ol class="sim-feed" data-feed></ol>
-        </aside>
-      </div>
-    </div>
-    <p class="sim-note">A simulation on the demo ROM that ships with the app. The assembly is the ROM's real code and the C compiles back to exactly those bytes; the agents and timing are simulated. Click any square to look inside.</p>
-  </div>
-</section>
-
-<section class="band" id="how">
+<section class="band gone">
   <div class="wrap">
     <div class="head">
-      <p class="kicker">How it works</p>
-      <h2>Pick a game. Pick an agent. Watch.</h2>
-    </div>
-    <ol class="steps">
-      <li><span class="n">01</span><h3>Open your game</h3><p>Drop in a game for N64, PlayStation 1 or 2, GameCube, Wii, Game Boy Advance or DS, as a ROM, disc image or program file. decomp.wtf finds every function. GameCube, Wii and N64 are the recommended platforms, the most tested path to a full decomp you can port and mod; the rest are in beta. Or continue a public decomp for any platform. Your file never leaves your computer.</p></li>
-      <li><span class="n">02</span><h3>Add your agent</h3><p>Claude Code, Codex, Antigravity CLI, opencode, or any model with an API key. Run several at once: each takes a different function, and they share what they learn.</p></li>
-      <li><span class="n">03</span><h3>Watch it match</h3><p>The map fills in as functions match. Every attempt, score and name is live. Export the source whenever you like, or decompile it as a team: everyone with their own copy and their own agents.</p></li>
-    </ol>
-  </div>
-</section>
-
-<section class="band" id="public">
-  <div class="wrap">
-    <div class="head">
-      <p class="kicker">Public decomps</p>
-      <h2>Carry on where the community left off.</h2>
-      <p>Hundreds of games already have a community decomp with the build set up and part of the code done. Pick one from decomp.dev, add your own copy of the game, and your agents keep going in the project's real source code.</p>
-    </div>
-    <div class="chips">
-      <span class="chip">GameCube</span><span class="chip">Wii</span><span class="chip">PlayStation</span><span class="chip">PlayStation 2</span>
-      <span class="chip">Nintendo 64</span><span class="chip">Game Boy Advance</span><span class="chip">DS</span><span class="chip">Switch</span>
-      <span class="chip">PC</span><span class="chip">Xbox 360</span><span class="chip">3DS</span><span class="chip">PSP</span>
-    </div>
-    <ol class="steps">
-      <li><span class="n">01</span><h3>Fork a project</h3><p>Browse the 245 projects on decomp.dev in the app, or paste any decomp repository. It's cloned to your computer on its own branch.</p></li>
-      <li><span class="n">02</span><h3>Add your copy</h3><p>decomp.wtf puts your game where the project expects it and runs the project's own setup, with its own compilers.</p></li>
-      <li><span class="n">03</span><h3>Agents match, files link</h3><p>objdiff judges every attempt, and each match is a git commit. On GameCube and Wii, a file whose code and data all match is linked into the game and checked against its checksum, like in real decomps.</p></li>
-    </ol>
-  </div>
-</section>
-
-<section class="band" id="rule">
-  <div class="wrap rule">
-    <div>
-      <p class="kicker">The rule</p>
-      <h2>Score 0, or it doesn't count.</h2>
-      <ul class="points">
-        <li><b>Byte-identical, not "close".</b> Each attempt is built with the game's own compiler and compared with the original.</li>
-        <li><b>Every miss explains itself.</b> The agent gets an instruction diff and fixes structure first, registers last.</li>
-        <li><b>Knowledge compounds.</b> Structs, prototypes and names are shared, and only accepted if everything matched so far still matches.</li>
-        <li><b>Finished means linked.</b> On GameCube and Wii, a file that matches completely is built into the game, and the whole game must still match its checksum.</li>
-      </ul>
-    </div>
-    <div class="pipe" aria-label="What happens to every attempt">
-      <div class="pipe-row"><i>1</i><b>The agent writes C</b><code>clamp_s32.c</code></div>
-      <div class="pipe-row"><i>2</i><b>The original compiler builds it</b><code>KMC GCC 2.7.2 -O2</code></div>
-      <div class="pipe-row"><i>3</i><b>Linked at the function's real address</b><code>0x800007D0</code></div>
-      <div class="pipe-row ok"><i>✓</i><b>Compared with your ROM, byte for byte</b><code>score 0</code></div>
-    </div>
-  </div>
-</section>
-
-<section class="band" id="agents">
-  <div class="wrap">
-    <div class="head">
-      <p class="kicker">Agents</p>
-      <h2>Bring the agent you already use.</h2>
-      <p>decomp.wtf is free. Your agent runs on your own subscription or API credits; the app installs it if you don't have it yet and tells you how to sign in.</p>
-    </div>
-    <div class="chips">
-      <span class="chip">Claude Code <small>Anthropic</small></span>
-      <span class="chip">Codex <small>OpenAI</small></span>
-      <span class="chip">Antigravity CLI <small>Google</small></span>
-      <span class="chip">opencode <small>DeepSeek, Qwen, Kimi…</small></span>
-      <span class="chip">API key <small>DeepSeek, OpenRouter</small></span>
-      <span class="chip">Local models <small>Ollama, LM Studio</small></span>
-      <span class="chip">Any MCP client <small>Cursor, Claude Desktop</small></span>
-    </div>
-    <p class="fine">Agents only get decomp.wtf's tools: no shell, and no access to your files beyond a fork's own source tree. They also get the know-how decomp veterans use: the game's compiler, machine-made drafts (m2c, Ghidra), a look-alike finder that starts them from code that already matches, a data inspector, a call graph, and guides for MIPS, PowerPC, ARM, x86, AArch64, Metrowerks, GCC, IDO, C++ and objdiff.</p>
-  </div>
-</section>
-
-<section class="band" id="ask">
-  <div class="wrap">
-    <div class="head">
-      <p class="kicker">From your terminal</p>
-      <h2>Or just ask your agent.</h2>
-      <p>Connect decomp.wtf to Claude Code, Codex, Antigravity CLI or opencode once. Then ask for what you want: it confirms the game is your own copy, imports it, opens the live view and works with every tool here, including helper agents running in parallel.</p>
-    </div>
-    <div class="install ask">
-      <div class="cmd"><span>$</span><code>decomp connect</code><button type="button" class="copy" data-copy="decomp connect">Copy</button></div>
-      <div class="cmd say"><span>&gt;</span><code>decompile my game at ~/roms/game.z64</code></div>
-      <small>Claude Code users can also add it as a plugin: <code>/plugin marketplace add i12bp8/decomp.wtf</code>. Antigravity CLI (<code>agy</code>, Gemini CLI's successor): <code>decomp connect antigravity</code>.</small>
-    </div>
-  </div>
-</section>
-
-<section class="band" id="local">
-  <div class="wrap">
-    <div class="head">
-      <p class="kicker">Your game, your computer</p>
-      <h2>Nothing is uploaded. Nothing is provided.</h2>
-    </div>
-    <div class="trio">
-      <div><h3>Runs locally</h3><p>No account, no telemetry. Your game and everything made from it stay on your machine.</p></div>
-      <div><h3>Bring your own game</h3><p>Use games you own. decomp.wtf doesn't supply or find ROMs and doesn't touch copy protection.</p></div>
-      <div><h3>Keep it to yourself</h3><p>Decompiled code still belongs to the game's rights holder. Try everything first with the included demo ROM.</p></div>
-    </div>
-  </div>
-</section>
-
-<section class="band" id="faq">
-  <div class="wrap">
-    <div class="head"><p class="kicker">FAQ</p><h2>Good to know</h2></div>
-    <div class="faq">
-      <details><summary>Why "decomp.wtf"?</summary><p>WTF stands for <b>What The Function</b>: what everyone says the first time they stare at a page of MIPS assembly. decomp.wtf answers it, one function at a time.</p></details>
-      <details><summary>Why not just ask a general AI agent to decompile my game?</summary><p>You can, and with decomp.wtf connected that's exactly what happens, minus the hours of setup. Matching decompilation needs the game's original compiler at the right version and flags, a splitter that finds every function, a judge that compiles each attempt and compares it with the game byte for byte, and a way to keep many agents from colliding. decomp.wtf brings all of that, pinned and ready in seconds, plus free matches before your agent spends a token (code the game has more than once, machine drafts, a permuter for near misses), a live view, and an export that rebuilds the game.</p></details>
-      <details><summary>Which games work?</summary><p>From scratch: Nintendo 64 (KMC GCC, IDO), PlayStation and PlayStation 2 (PSY-Q GCC, EE-GCC), GameCube and Wii (CodeWarrior, as a dtk-template project), Game Boy Advance (agbcc) and DS (CodeWarrior for DS, as a ds-decomp project). PC, Switch and more are coming. Beyond that, any public decomp whose build produces an objdiff report, which covers practically every project on decomp.dev, on every platform.</p></details>
-      <details><summary>Which computers does it run on?</summary><p><b>Linux</b>, and <b>Windows</b> (supported, still unstable). Several of the compilers only exist as Linux programs, so on Windows decomp.wtf runs in its own small Linux (WSL 2), which the installer sets up. You use it in your browser either way, and the results are byte for byte the same. macOS isn't supported.</p></details>
-      <details><summary>C or C++?</summary><p>Both. GameCube, Wii and DS games are often C++, and decomp.wtf handles it: code with C++ symbol names goes into <code>.cpp</code> files, drafts come out as C++, and agents get a guide to classes, vtables, constructors and name mangling. N64, PlayStation, PS2 and GBA games started from scratch are written in C for now; C++ there (mostly PS2) is coming. Public decomps use whatever language the project uses.</p></details>
-      <details><summary>Can we decompile a game as a team?</summary><p>Yes, as many people as you like, each on their own computer with their own copy of the game and their own agents. One of you hosts the room on a home PC or a server (<code>decomp host</code>), public or private, and decides who's in. Functions are handed out so nobody collides, every match is checked against the host's copy, and names, structs and notes are shared. Nothing goes through decomp.wtf: you host it, and you decide who sees the code.</p></details>
-      <details><summary>Can I use the result for a port or a mod?</summary><p>That's the idea. Export project writes a normal decompilation project, matched functions as C and the rest as assembly, that rebuilds your game byte for byte (GameCube, Wii and DS projects do that on every build). On GameCube and Wii, finished files are linked as you go: the game is built from their C, the way decomp.dev projects count "linked", which is what a native PC port starts from. Keep going with any tool or agent until it's all C. Game code and data stay out of git and are regenerated from your own copy.</p></details>
-      <details><summary>Will my agents' code end up in the community's project?</summary><p>Not by itself. In a public decomp, every match is a commit on your own local branch and nothing is sent anywhere. Many projects don't accept AI-written contributions, and the ones that do expect a person to stand behind every line: read the project's contribution rules, review the code yourself and say how it was made before you open a pull request.</p></details>
-      <details><summary>Do I need to know anything about decompilation?</summary><p>No. The agent does the work and the app shows what's going on. If you read MIPS, you can follow every attempt and jump in.</p></details>
-      <details><summary>What does it cost?</summary><p>Nothing; the app is free and open source (MIT, <a href="https://github.com/i12bp8/decomp.wtf">source on GitHub</a>). Your agent uses your own plan or API credits. In our tests a small function cost Claude Code about 8 cents, DeepSeek a fraction of that, and a local model nothing at all. Big functions take many more attempts, and cheaper models often get stuck on them, so the easy part of a game goes fast and the rest takes real time.</p></details>
-      <details><summary>Is it legal?</summary><p>decomp.wtf is a tool, like a disassembler: it contains no game code and runs on your computer. How you use it is up to you and the law where you live. Use games you own and keep the results private. This isn't legal advice.</p></details>
-      <details><summary>What does it build on?</summary><p>splat and spimdisasm split ROMs, objdiff judges forks, m2c and Ghidra write first drafts, the decomp community's recompiled period compilers do the building, and decomp.dev lists the public projects. Not affiliated with any of these projects.</p></details>
-    </div>
-  </div>
-</section>
-
-<section class="final">
-  <div class="wrap">
-    <h2>One line, and your agent gets to work.</h2>
-    <div class="install">
-      <div class="cmd" data-os="unix"><span>$</span><code>curl -fsSL https://decomp.wtf/install.sh | bash</code><button type="button" class="copy" data-copy="curl -fsSL https://decomp.wtf/install.sh | bash">Copy</button></div>
-      <div class="cmd" data-os="win" hidden><span>&gt;</span><code>irm https://decomp.wtf/install.ps1 | iex</code><button type="button" class="copy" data-copy="irm https://decomp.wtf/install.ps1 | iex">Copy</button></div>
-      <small>Linux, and Windows (still unstable, in WSL 2). Free, open source, and easy to remove. Start it again any time by typing <code>decomp</code>.</small>
+      <p class="kicker">Discontinued</p>
+      <h2>This project is discontinued.</h2>
+      <p>I've decided to stop working on decomp.wtf and archive it.</p>
+      <p>Over the last few days I noticed that a lot of the decompilation community, the people who made the tools and projects all of this is built on, is against AI decompiling like this. I didn't make decomp.wtf to do any harm, but I respect their opinion, and that's why I'm stopping it here.</p>
+      <p>The code stays up on <a href="https://github.com/i12bp8/decomp.wtf">GitHub</a> as it is, under the MIT license. If you want to fork it and keep going with it, you can. I won't fix issues, review pull requests or make new releases anymore. If you already have it installed it keeps working, it just won't get any updates.</p>
+      <p>If you do use it or build on it, please only use it on games you own, don't share the game code it produces, and respect the rules of the projects you work with, because many of them don't want AI-made contributions.</p>
+      <p>Thanks to everyone who tried it, reported bugs and sent fixes.</p>
     </div>
   </div>
 </section>
@@ -247,8 +55,5 @@
     <p>Free and open source (MIT). Not affiliated with Nintendo, Sony, Microsoft or any game publisher; platform names are their owners' trademarks.</p>
   </div>
 </footer>
-
-<script src="/home.js" defer></script>
-<script src="/sim.js" defer></script>
 </body>
 </html>

@@ -389,10 +389,21 @@ class ForkEngine:
     def _meta(fn) -> dict:
         return json.loads(fn["meta"]) if fn["meta"] else {}
 
-    def catalog(self, fetch: bool = True) -> list[dict]:
-        return catalog.catalog(self.net.workspace / ".decomp" / "catalog.json", fetch=fetch)
+    def catalog(self) -> tuple[list[dict], float | None]:
+        """decomp.dev's list as this install downloaded it before the directory was retired, and when."""
+        path = self.net.workspace / ".decomp" / "catalog.json"
+        return catalog.catalog(path), catalog.cached_at(path)
 
     # ------------------------------------------------------------------ creating a fork
+
+    def policy(self, repo: str) -> dict:
+        """What a public decomp says about AI and contributions (forks/policy.py), before it's forked."""
+        from ..forks import policy
+
+        m = _REPO.match(repo.strip())
+        if not m:
+            raise NetworkError("give a GitHub/GitLab/Codeberg repository URL (https://github.com/owner/repo)")
+        return {"repo": m.group(1), **policy.check(m.group(1))}
 
     def clone(self, repo: str, *, name: str = "", platform: str = "", version: str | None = None, log=print) -> str:
         repo = repo.strip()

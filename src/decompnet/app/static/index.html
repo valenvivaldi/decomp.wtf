@@ -116,7 +116,7 @@
     <a class="start-card accent" href="#/catalog">
       <span class="sc-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h5v4H2zm7 0h5v4H9zM2 9h5v4H2zm7 0h5v4H9z"/></svg></span>
       <b>Continue a public decomp</b>
-      <span><span id="forkCount">Hundreds of</span> community projects on every platform. Fork one, add your copy, your agents carry on.</span>
+      <span>Paste a community decomp's repository, add your copy, your agents carry on.</span>
     </a>
     <button class="start-card" id="demoBtn" type="button">
       <span class="sc-icon"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg></span>
@@ -144,22 +144,19 @@
 <!-- ================================================================ public decomps -->
 <main id="catalog" class="view" hidden>
   <header class="page-head">
-    <p class="eyebrow">Public projects from decomp.dev</p>
+    <p class="eyebrow">Public decomps</p>
     <h1>Continue a public decomp</h1>
-    <p class="muted">Pick a project and add your own copy of its game. Your agents work in the project's real source tree, judged by objdiff, and every match is committed to a local git branch you can send upstream.</p>
-    <p class="credit small">This list comes from <a href="https://decomp.dev" target="_blank" rel="noopener">decomp.dev</a>, the community's home for matching decompilation projects and their progress, made by <a href="https://github.com/encounter" target="_blank" rel="noopener">encounter</a>, who also makes decomp-toolkit and objdiff, two of the tools decomp.wtf is built on. Thank you! Visit it for each project's history, files and contributors.</p>
+    <p class="muted">Paste a community decomp's repository and add your own copy of its game. Before anything is cloned, decomp.wtf shows what the project says about AI and contributions: every project decides that for itself. Your fork stays on this computer; decomp.wtf never pushes it or opens pull requests.</p>
+    <div class="row repo-row"><input id="repoUrl" class="mono" placeholder="https://github.com/owner/repo" aria-label="Repository address"><button class="primary" id="repoFork" type="button">Look at it</button></div>
+    <p class="credit small"><a href="https://decomp.dev" target="_blank" rel="noopener">decomp.dev</a>, the community's home for matching decompilation progress, made by <a href="https://github.com/encounter" target="_blank" rel="noopener">encounter</a> (who also makes decomp-toolkit and objdiff, two of the tools decomp.wtf is built on), retired its project directory on 15 October 2026. Each project's page there still has its history, files and contributors.</p>
   </header>
-  <div class="cat-tools">
+  <div class="cat-tools" id="catTools">
     <input id="catSearch" class="search" type="search" placeholder="Search games and teams" aria-label="Search projects">
     <label class="check inline"><input type="checkbox" id="catDone"><span>Show finished</span></label>
   </div>
   <div class="chips" id="catChips" role="tablist" aria-label="Platform"></div>
   <div class="cat-grid" id="catGrid"></div>
   <p class="muted small cat-note" id="catNote"></p>
-  <section class="demo-row">
-    <div><h3>Not listed?</h3><p class="muted">Fork any decomp repository on GitHub, GitLab or Codeberg by its address. <a href="https://decomp.dev" target="_blank" rel="noopener">Browse decomp.dev</a> to find one: open a project there and copy its repository link.</p></div>
-    <div class="row repo-row"><input id="repoUrl" class="mono" placeholder="https://github.com/owner/repo" aria-label="Repository address"><button class="ghost" id="repoFork" type="button">Fork</button></div>
-  </section>
 </main>
 
 <!-- ================================================================ a project -->

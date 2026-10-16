@@ -23,7 +23,7 @@
 # On a server, decomp.wtf also runs in Docker: docker-compose.yml in the repository.
 set -euo pipefail
 
-VERSION="0.10.4"
+VERSION="0.10.6"
 REPO="i12bp8/decomp.wtf"
 START=1
 SOURCE="${DECOMP_SOURCE:-}"

@@ -497,6 +497,9 @@ a.ghost, a.primary { text-decoration: none; }
 
 /* ------------------------------------------------------------------ public decomps, tools */
 .cat-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.page-head .repo-row { margin-top: 12px; max-width: 640px; }
+.policy-line { margin: 6px 0; padding: 6px 10px; border-left: 3px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  background: color-mix(in srgb, var(--ink) 4%, transparent); border-radius: 0 6px 6px 0; font-size: 13px; }
 .cat-grid, .tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; margin-top: 16px; }
 .cat-card, .tool-card { display: grid; gap: 9px; align-content: start; text-align: left; padding: 16px; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel); min-width: 0; }
 .cat-card { transition: border-color .15s, transform .15s; }

@@ -1,3 +1,17 @@
+## This project is discontinued
+
+I've decided to stop working on decomp.wtf and archive it.
+
+Over the last few days I noticed that a lot of the decompilation community, the people who made the tools and projects all of this is built on, is against AI decompiling like this. I didn't make decomp.wtf to do any harm, but I respect their opinion, and that's why I'm stopping it here.
+
+The code stays up as it is, under the MIT license. If you want to fork it and keep going with it, you can. I won't fix issues, review pull requests or make new releases anymore. If you already have it installed it keeps working, it just won't get any updates. You can still install the last version (0.10.6) with the commands under [Install](#install).
+
+If you do use it or build on it, please only use it on games you own, don't share the game code it produces, and respect the rules of the projects you work with, because many of them don't want AI-made contributions.
+
+Thanks to everyone who tried it, reported bugs and sent fixes.
+
+---
+
 <p align="center">
   <a href="https://decomp.wtf">
     <picture>

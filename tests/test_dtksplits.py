@@ -1,6 +1,8 @@
 """Editing a dtk-template project's file layout like a contributor: splits.txt round trips, configure.py gets new
 files in the right library with the settings its neighbours use, or a new library made like a sibling module's."""
 
+import struct
+
 from decompnet.forks import dtksplits
 
 SPLITS = """Sections:
@@ -177,3 +179,32 @@ def test_a_function_dtk_stops_short_of_is_declared_from_the_exception_table(tmp_
     assert path.read_text(encoding="utf-8") == "fn_8004C13C = .text:0x8004C13C; // type:function size:0x128\n"
     assert scratch_dtk._declare_function(tmp_path, "GOCE5D", bytes(dol), tail) is None  # said once: no loop
     assert scratch_dtk._declare_function(tmp_path, "GOCE5D", bytes(dol), tail.replace("13C", "200")) is None  # not in the table
+
+
+def _rel(module_id: int, imports: list[int]) -> bytes:
+    """A minimal REL header (version 3, one section) with an import table naming `imports`."""
+    imp = b"".join(struct.pack(">II", i, 0) for i in imports)
+    head = struct.pack(">IIIIIIIIIIII", module_id, 0, 0, 1, 0x48, 0, 0, 3, 0, 0, 0x50, len(imp))
+    return head.ljust(0x50, b"\0") + imp
+
+
+def test_modules_that_need_a_module_the_disc_keeps_compressed_are_left_out_at_once(tmp_path):
+    """#20: Sonic Adventure DX's event modules all import from a module the disc keeps compressed (SaCompGC), so
+    decomp-toolkit stopped on one after another ("Failed to locate module 1") and the import gave up after 40
+    analyses. Every module that needs the missing one goes in one step; the others stay."""
+    from decompnet.forks import scratch_dtk
+
+    gid, base = "GXSP8P", tmp_path / "orig" / "GXSP8P"
+    (base / "files").mkdir(parents=True)
+    for name, imports in (("ev000b", [0, 1]), ("ev000c", [0, 1, 7]), ("adv00", [0])):
+        (base / "files" / f"{name}.rel").write_bytes(_rel(9, imports))
+    assert scratch_dtk.rel_imports(_rel(9, [0, 1])) == {0, 1}
+    assert scratch_dtk.is_compressed_rel(b"\0" * 8 + b"SaCompGC" + b"\0" * 64)
+    cfg = tmp_path / "config" / gid / "config.yml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(f"object_base: orig/{gid}\nobject: sys/main.dol\nmodules:\n" + "".join(
+        f"- object: files/{n}.rel\n  hash: 00\n  splits: config/{gid}/rels/{n}/splits.txt\n" for n in ("ev000b", "adv00", "ev000c")))
+    tail = "Failed: Creating relocations for module ev000b\n\nCaused by:\n    Failed to locate module 1\n"
+    assert scratch_dtk._drop_module(tmp_path, gid, tail) == ["ev000b", "ev000c"]
+    text = cfg.read_text()
+    assert "\n- object: files/adv00.rel" in text and "\n- object: files/ev000b.rel" not in text and "# - object: files/ev000c.rel" in text

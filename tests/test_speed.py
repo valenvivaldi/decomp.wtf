@@ -145,6 +145,24 @@ def test_a_twin_that_didnt_match_isnt_tried_again_until_its_code_changes(game, m
     net.twins.forget(net.project_row(slug))
 
 
+def test_hand_written_code_in_a_rom_is_set_aside(game):
+    """#22: on MIPS ROM projects too, code no compiler makes (here: mfc0, the system coprocessor) is taken out of
+    agents' way when they start, with the reason."""
+    import struct
+
+    net, slug, _ = game
+    proj = net.project_row(slug)
+    with net.store.tx() as db:
+        db.execute("INSERT INTO functions(project_id,name,size,n_insns,target,relocs,asm,unit,vram,status) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?)", (proj["id"], "func_80400400", 12, 3,
+                                                  struct.pack(">III", 0x40026000, 0x03E00008, 0), "[]", "", "", 0x80400400, "open"))
+    assert net.twins.set_aside_asm(proj) == 1
+    row = net._function("func_80400400", slug)
+    assert row["status"] == "asm" and "coprocessor 0" in json.loads(row["meta"])["asm_code"]
+    assert all(r["status"] != "asm" for r in net.store.all("SELECT status FROM functions WHERE project_id=? AND name!=?",
+                                                              proj["id"], "func_80400400"))  # the game's C: none
+
+
 def test_an_agents_match_reaches_its_twins_at_once(game, monkeypatch):
     """While the full twins pass runs (12 minutes on Mario Party 6), an agent's match is tried on its twins at once;
     the pass's own matches aren't queued again (it tries their twins itself)."""

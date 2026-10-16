@@ -176,7 +176,6 @@ async function showHome() {
   show("home");
   resetDrop();
   const st = await loadState();
-  api("/api/catalog?cached=1").then((c) => { if (c.projects.length) $("forkCount").textContent = c.projects.length.toLocaleString(); }).catch(() => {});  // never a request to decomp.dev
   const box = $("projects");
   box.innerHTML = "";
   $("recent").hidden = !st.projects.length;
@@ -1173,10 +1172,11 @@ async function installToolchain(id, proprietary) {
 /* ------------------------------------------------------------------ public decomps */
 const PLAT_ORDER = ["gc", "wii", "ps", "ps2", "n64", "gba", "nds", "switch", "win32", "xbox360", "3ds", "xbox", "psp"];
 const PLAT_SHORT = { gc: "GameCube", wii: "Wii", ps: "PS1", psx: "PS1", ps2: "PS2", n64: "N64", gba: "GBA", nds: "DS", switch: "Switch", win32: "PC", xbox360: "Xbox 360", "3ds": "3DS", xbox: "Xbox", psp: "PSP" };
-const cat = { list: null, plat: "", q: "", done: false };
+const cat = { list: null, downloaded: null, plat: "", q: "", done: false };
 
+/* The list decomp.dev had, as this install downloaded it before the directory was retired (none on a new one). */
 async function loadCatalog() {
-  if (!cat.list) cat.list = (await api("/api/catalog")).projects;
+  if (!cat.list) ({ projects: cat.list, downloaded: cat.downloaded } = await api("/api/catalog"));
   return cat.list;
 }
 
@@ -1188,13 +1188,10 @@ function ago(iso) {
 
 async function showCatalog() {
   show("catalog");
-  $("catGrid").innerHTML = `<p class="muted">Loading projects from decomp.dev…</p>`;
-  try { await loadCatalog(); } catch (e) {
-    $("catGrid").innerHTML = `<div class="cat-empty"><p class="muted">${esc(e.message)}, so its list can't be shown here. You can still continue any public decomp:</p>
-      <p><a class="btn ghost" href="https://decomp.dev" target="_blank" rel="noopener">Browse decomp.dev</a> <span class="muted small">open a project there, copy its repository link and paste it below.</span></p></div>`;
-    $("catNote").textContent = ""; $("catChips").innerHTML = "";
-    return;
-  }
+  try { await loadCatalog(); } catch { cat.list = []; }
+  const any = cat.list.length > 0;
+  $("catTools").hidden = $("catChips").hidden = !any;
+  if (!any) { $("catGrid").innerHTML = ""; $("catNote").textContent = ""; return; }
   if (!S.st) await loadState().catch(() => {});
   renderCatalog();
 }
@@ -1212,7 +1209,8 @@ function renderCatalog() {
   const forked = new Map((S.st?.projects || []).filter((p) => p.kind === "fork").map((p) => [p.repo_url, p.slug]));
   const rows = all.filter((p) => (!cat.plat || p.platform === cat.plat) && (cat.done || p.matched < 99.99)
     && (!q || `${p.name} ${p.id}`.toLowerCase().includes(q)));
-  $("catNote").textContent = `${rows.length} of ${all.length} projects${cat.done ? "" : " (finished ones hidden)"}. The list and progress are decomp.dev's (updated here once a day); decomp.wtf isn't affiliated with these projects.`;
+  const when = cat.downloaded ? new Date(cat.downloaded * 1000).toLocaleDateString() : "earlier";
+  $("catNote").textContent = `${rows.length} of ${all.length} projects${cat.done ? "" : " (finished ones hidden)"}: the list decomp.wtf downloaded from decomp.dev ${cat.downloaded ? "on " + when : when}, before its directory was retired, with the progress of then. decomp.wtf isn't affiliated with these projects.`;
   $("catGrid").innerHTML = rows.slice(0, 240).map((p) => `<button class="cat-card" type="button" data-id="${esc(p.id)}">
       <div class="cc-top"><span class="plat">${esc(PLAT_SHORT[p.platform] || p.platform_name)}</span>${forked.has(p.repo_url) ? `<span class="badge matched">forked</span>` : p.matched >= 99.99 ? `<span class="badge">done</span>` : ""}</div>
       <h4>${esc(p.name)}</h4>
@@ -1231,20 +1229,40 @@ function renderCatalog() {
 }
 $("catSearch").addEventListener("input", () => { cat.q = $("catSearch").value; renderCatalog(); });
 $("catDone").addEventListener("change", () => { cat.done = $("catDone").checked; renderCatalog(); });
+$("repoUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") $("repoFork").click(); });
 $("repoFork").onclick = () => {
   const url = $("repoUrl").value.trim();
   if (!url) return;
   openForkDialog({ name: url.replace(/\/+$/, "").split("/").pop().replace(/\.git$/, ""), repo_url: url, platform: "", platform_name: "", id: url });
 };
 
+/* What the project's own files say about AI, word for word, before anything is cloned. */
+function policyHtml(pol) {
+  if (pol.error) return `<div class="notice"><span>Couldn't read what the project says about AI (${esc(pol.error)}). Look at its README and contribution rules yourself before you fork it.</span></div>`;
+  const quotes = pol.lines.map((l) => `<blockquote class="policy-line">“${esc(l.text)}” <span class="muted small">${esc(l.file)}</span></blockquote>`).join("");
+  if (pol.lean === "no") return `<div class="notice bad"><span><b>This project says it doesn't want AI-made code.</b> Respect that: keep this fork for yourself, to study the game, and send it nothing your agents wrote.</span></div>${quotes}
+    <label class="check"><input type="checkbox" id="forkOk"><span>I'll keep this fork to myself and won't send AI-made code to this project.</span></label>`;
+  if (pol.lean === "silent") return `<p class="muted small">Its README and contribution files (${esc(pol.files.join(", ") || "none")}) say nothing about AI. Ask the project's team before you send it anything your agents wrote.</p>`;
+  if (pol.lean === "rules") return `<p class="small"><b>This project allows AI, with rules of its own.</b> Follow them in anything you send it:</p>${quotes}`;
+  return `<p class="small"><b>What the project says about AI:</b></p>${quotes}`;
+}
+
 function openForkDialog(p) {
   const body = dialog(`Fork ${p.name}`, `<p>decomp.wtf clones <a class="link" href="${esc(p.repo_url)}" target="_blank" rel="noopener">${esc(p.id)}</a> to this computer and sets it up for your agents.</p>
-    <dl class="facts">${[["Platform", p.platform_name || "?"], ["Version", p.version || "the project's default"], ["Progress", p.functions ? `${p.matched.toFixed(1)}% of code` : "?"]]
+    ${p.functions ? `<dl class="facts">${[["Platform", p.platform_name || "?"], ["Version", p.version || "the project's default"], ["Progress", `${p.matched.toFixed(1)}% of code`]]
       .map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
-    ${p.functions ? `<p class="muted small">Progress from <a class="link" href="https://decomp.dev/${esc(p.id)}" target="_blank" rel="noopener">its page on decomp.dev</a>, where the project's history, every file and its contributors are.</p>` : ""}
-    <p class="muted small">Next you add <b>your own copy of the game</b>. Its code stays on your computer; your agent's provider sees the functions it works on. Setting up runs the project's own build scripts, as building it yourself would, so fork projects you trust. Matches are committed to a local <code>decomp-wtf</code> branch: what you push upstream is up to you and the project's rules.</p>
-    <div class="row"><button class="primary" id="forkGo" type="button">Fork it</button><button class="ghost" data-close type="button">Cancel</button></div>
+      <p class="muted small">Progress as decomp.dev last listed it; <a class="link" href="https://decomp.dev/${esc(p.id)}" target="_blank" rel="noopener">its page there</a> has the project's history, files and contributors.</p>` : ""}
+    <div id="forkPolicy"><p class="muted small">Reading what the project says about AI and contributions…</p></div>
+    <p class="muted small">Next you add <b>your own copy of the game</b>. Its code stays on your computer; your agent's provider sees the functions it works on. Setting up runs the project's own build scripts, as building it yourself would, so fork projects you trust. Matches are committed to a local <code>decomp-wtf</code> branch, and decomp.wtf never pushes it anywhere: anything you send upstream is up to you and the project's rules.</p>
+    <div class="row"><button class="primary" id="forkGo" type="button" disabled>Fork it</button><button class="ghost" data-close type="button">Cancel</button></div>
     <pre class="joblog" id="forkLog" hidden></pre>`);
+  api("/api/fork/policy", { method: "POST", body: { repo: p.repo_url } }).catch((e) => ({ error: e.message, lines: [], files: [], lean: "silent" })).then((pol) => {
+    if (!$("forkPolicy")) return;  // (the dialog was closed meanwhile)
+    $("forkPolicy").innerHTML = policyHtml(pol);
+    const ok = $("forkOk");
+    $("forkGo").disabled = !!ok;
+    if (ok) ok.onchange = () => { $("forkGo").disabled = !ok.checked; };
+  });
   body.querySelector("#forkGo").onclick = async () => {
     $("forkGo").disabled = true;
     $("forkLog").hidden = false;
