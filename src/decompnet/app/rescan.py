@@ -95,7 +95,9 @@ def _plan(net, proj, fns, text):
         same = (before is not None and before["name"] == name and before["target"] == fn.code
                 and before["size"] == len(fn.code)
                 and ("arm_func_start" not in (before["asm"] or "")) == fn.thumb
-                and json.loads(before["relocs"] or "[]") == [list(r) for r in fn.refs or []])
+                and json.loads(before["relocs"] or "[]") == [list(r) for r in fn.refs or []]
+                # newly recognized hand-written assembly (or no longer) is a change too: its status follows
+                and (before["status"] == "asm") == bool(fn.asm_only))
         category = "added" if before is None else "unchanged" if same else "changed"
         if before:
             item["id"] = before["id"]

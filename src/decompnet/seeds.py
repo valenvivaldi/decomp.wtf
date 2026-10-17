@@ -25,6 +25,7 @@ M2C_TARGETS = {
     "gcc-2.7.2-psx": "mipsel-gcc-c",
     "gcc-2.8.1-psx": "mipsel-gcc-c",
     "agbcc": "gba-gcc-c",
+    "agbcc-old": "gba-gcc-c",
 }
 # What m2c's --valid-syntax output needs to compile: its unknown types and macros, defined the simplest way that
 # keeps the code's meaning (written for decomp.wtf; the names are m2c's interface).

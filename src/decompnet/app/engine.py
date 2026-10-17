@@ -47,10 +47,11 @@ COMPILERS = {
     "ee-gcc-2.96": "PlayStation 2 games (Sony's EE GCC)",
     "mwcc-ps2": "PlayStation 2 games built with CodeWarrior (proprietary)",
     "agbcc": "Game Boy Advance games (pret's agbcc, GCC 2.95)",
+    "agbcc-old": "Nintendo's GBA SDK libraries (flash, multiboot): old_agbcc",
 }
 SHORT_NAMES = {"gcc-2.7.2-kmc": "KMC GCC 2.7.2", "ido-7.1": "IDO 7.1", "ido-5.3": "IDO 5.3",
                "gcc-2.7.2-psx": "GCC 2.7.2 (PS1)", "gcc-2.8.1-psx": "GCC 2.8.1 (PS1)", "ee-gcc-2.96": "EE-GCC 2.96",
-               "agbcc": "agbcc", "mwcc-ps2": "MWCC PS2 3.0.1 b198"}
+               "agbcc": "agbcc", "agbcc-old": "old_agbcc", "mwcc-ps2": "MWCC PS2 3.0.1 b198"}
 # CodeWarrior versions in the `mwcc` pack (GameCube, Wii) and the `mwccarm` pack (DS), for games started from scratch.
 MW_VERSIONS = {
     "gc": ["GC/1.0", "GC/1.1", "GC/1.1p1", "GC/1.2.5", "GC/1.2.5n", "GC/1.3", "GC/1.3.2", "GC/1.3.2r", "GC/2.0",
@@ -75,7 +76,7 @@ TOOLS = {
 # Functions this small are handed out in batches (claim_function count): agents match most on the first try.
 BATCH_INSNS = 48
 PLATFORM_COMPILERS = {"n64": ["gcc-2.7.2-kmc", "ido-7.1", "ido-5.3"], "psx": ["gcc-2.7.2-psx", "gcc-2.8.1-psx"],
-                      "ps2": ["ee-gcc-2.96", "mwcc-ps2"], "gba": ["agbcc"]}
+                      "ps2": ["ee-gcc-2.96", "mwcc-ps2"], "gba": ["agbcc", "agbcc-old"]}
 _AUTO_TOKEN = re.compile(r"\b(?:func|D|B|jtbl|RO|STR|FLT|DBL)_[0-9A-F]{8}\b")
 _ADDRESS = re.compile(r"^(?:0x)?([0-9A-Fa-f]{8})$")
 

@@ -360,6 +360,23 @@ url = "https://github.com/pret/agbcc/releases/download/release/agbcc.tar.gz"
 sha256 = "bcf0197e3e27d8e08506a142e25fa68ea7f6679a98347a6406804eb3f9ff4d29"
 platforms = ["linux-x86_64"]
 
+[agbcc-old]
+name = "agbcc (old_agbcc)"
+platform = "GBA"
+arch = "arm"
+license = "GPL-2.0"
+source = "pret/agbcc release"
+description = "old_agbcc from the same pret release: the build Nintendo's SDK libraries (flash, multiboot) were compiled with. Leaf functions return with bx lr and save no registers, where agbcc pushes lr."
+cc = ["{tc}/bin/old_agbcc"]
+flags = ["-mthumb-interwork", "-O2"]
+requires = ["arm-gnu"]
+# agbcc only compiles preprocessed C to assembly: preprocess, compile, assemble, like pret's builds
+cmd = ["/bin/sh", "-c", "src=\"$1\"; obj=\"$2\"; inc=\"$3\"; shift 3; \"{tc:arm-gnu}/bin/arm-none-eabi-cpp\" -nostdinc -undef -I \"{tc}/include\" -I \"$inc\" \"$src\" -o \"$obj.i\" && \"{tc}/bin/old_agbcc\" \"$@\" \"$obj.i\" -o \"$obj.s\" && \"{tc:arm-gnu}/bin/arm-none-eabi-as\" -mcpu=arm7tdmi -o \"$obj\" \"$obj.s\"", "old_agbcc", "{src}", "{obj}", "{include}", "{flags}"]
+[["agbcc-old".parts]]
+url = "https://github.com/pret/agbcc/releases/download/release/agbcc.tar.gz"
+sha256 = "bcf0197e3e27d8e08506a142e25fa68ea7f6679a98347a6406804eb3f9ff4d29"
+platforms = ["linux-x86_64"]
+
 [maspsx]
 name = "maspsx"
 kind = "tool"

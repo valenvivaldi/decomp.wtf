@@ -99,6 +99,22 @@ def call_via(code: bytes) -> str | None:
     return None
 
 
+def hand_written(code: bytes) -> str | None:
+    """A known kind of hand-written assembly no C compiles to, by name, else None: libgcc's `_call_via_rN` thunks;
+    BIOS call veneers (`swi #N`, maybe `adds r0, r1, #0`, then `bx lr`: C can't emit a swi, and inline asm isn't
+    allowed); and libgcc's hand-written Thumb routines (division...), which return with `mov pc, lr`, something
+    agbcc with interworking never emits."""
+    if (name := call_via(code)) is not None:
+        return name
+    body = code.rstrip(b"\0")
+    if 2 <= len(code) <= 8 and code[1] == 0xDF and body.endswith(b"\x70\x47") and body[2:-2] in (b"", b"\x08\x1c"):
+        return f"_swi_{code[0]:02X}"
+    halves = [code[i:i + 2] for i in range(0, len(code) - 1, 2)]
+    if b"\xf7\x46" in halves and b"\x70\x47" not in halves:  # mov pc, lr; no bx lr
+        return "_libgcc_thumb"
+    return None
+
+
 @dataclass
 class GbaFunction:
     name: str
@@ -240,6 +256,6 @@ def _split_analysis(rom: bytes, asm: str, found: list[int], log=lambda *_: None)
         text, thumb = blocks.get(addr, (f"\tthumb_func_start sub_{addr:08X}\n", True))
         code = rom[off:end]
         out.append(GbaFunction(f"sub_{addr:08X}", addr, off, code, text, max(1, len(code) // 2), thumb,
-                               _refs(code, addr, literals, off), call_via(code)))
+                               _refs(code, addr, literals, off), hand_written(code)))
     log(f"found {len(out)} functions")
     return out
