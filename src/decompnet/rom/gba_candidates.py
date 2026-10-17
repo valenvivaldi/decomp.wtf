@@ -51,6 +51,10 @@ def _target(ins) -> int | None:
     return None
 
 
+def _is_bl(rom: bytes, pos: int) -> bool:
+    return pos + 4 <= len(rom) and rom[pos + 1] >> 3 == 0b11110 and rom[pos + 3] >> 3 == 0b11111
+
+
 def bodies(rom: bytes, known: list[int], literals: set[int] | None = None):
     """(start offset, end offset, instructions) of each known function: it ends at the first return that none of its
     own earlier branches jumps past (later code with a gap is another function or data). Literal pools in the
@@ -62,7 +66,9 @@ def bodies(rom: bytes, known: list[int], literals: set[int] | None = None):
         limit = min(len(rom), starts[k + 1] if k + 1 < len(starts) else start + 0x2000)
         body, furthest, pos = [], start, start
         while pos < limit:
-            if pos in literals:
+            # a `bl` is never half literal: the linear sweep's junk entries could land on one, and stepping over
+            # its first half ended the function in the middle of the call
+            if pos in literals and not _is_bl(rom, pos):
                 pos += 2
                 continue
             ins = next(md.disasm(rom[pos:pos + 4], BASE + pos, 1), None)
